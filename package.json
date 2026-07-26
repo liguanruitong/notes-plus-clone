@@ -1,6 +1,6 @@
 {
   "name": "notes-plus-clone",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "手写笔记应用（Notes Plus 风格）：压感手写 / 荧光笔 / 多页笔记本 / 导出 PDF",
   "main": "src/main/index.js",
   "license": "MIT",
@@ -21,16 +21,32 @@
   "build": {
     "appId": "com.notesplus.clone",
     "productName": "手写笔记",
-    "directories": { "output": "release" },
-    "files": ["src/**/*", "node_modules/**/*", "package.json"],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
     "win": {
       "target": [
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "portable": {
       "artifactName": "手写笔记-portable-${version}.exe"
     },
-    "linux": { "target": ["AppImage"], "category": "Office" }
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    }
   }
 }
