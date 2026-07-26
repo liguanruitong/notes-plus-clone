@@ -8,4 +8,9 @@ contextBridge.exposeInMainWorld("api", {
   newId: () => ipcRenderer.invoke("new-id"),
   exportPng: (payload) => ipcRenderer.invoke("export-png", payload),
   exportPdf: (payload) => ipcRenderer.invoke("export-pdf", payload),
+  exportImage: (payload) => ipcRenderer.invoke("export-image", payload),
+  importImage: () => ipcRenderer.invoke("import-image"),
+  importPdf: () => ipcRenderer.invoke("import-pdf"),
+  importXopp: () => ipcRenderer.invoke("import-xopp"),
+  exportXopp: (payload) => ipcRenderer.invoke("export-xopp", payload),
 });

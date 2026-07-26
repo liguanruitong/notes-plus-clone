@@ -21,6 +21,14 @@
     <button class="tb tool" data-tool="pan" title="拖动画布">✋</button>
   </div>
 
+  <!-- 自定义笔盘 -->
+  <div class="group pentray" id="penTray">
+    <div id="pens" class="pens"></div>
+    <button id="btnAddPen" class="tb small" title="把当前颜色/粗细存为新笔">＋</button>
+    <button id="btnEditPen" class="tb small" title="更新当前选中的笔">✎</button>
+    <button id="btnDelPen" class="tb small" title="删除当前选中的笔">🗑</button>
+  </div>
+
   <div class="group">
     <div id="palette" class="palette"></div>
     <input type="color" id="colorCustom" class="color-custom" title="自定义颜色" value="#1a1a1a">
@@ -55,9 +63,23 @@
     <button id="btnZoomFit" class="tb" title="适应">⤢</button>
   </div>
 
-  <div class="group">
-    <button id="btnExportPng" class="tb text">导出 PNG</button>
-    <button id="btnExportPdf" class="tb text">导出 PDF</button>
+  <!-- 导入 / 导出 下拉 -->
+  <div class="group menu-wrap">
+    <button id="btnImport" class="tb text">导入 ▾</button>
+    <div id="importMenu" class="dropdown">
+      <button data-imp="image">图片…</button>
+      <button data-imp="pdf">PDF…</button>
+      <button data-imp="xopp">Xournal++ (.xopp)…</button>
+    </div>
+  </div>
+  <div class="group menu-wrap">
+    <button id="btnExport" class="tb text">导出 ▾</button>
+    <div id="exportMenu" class="dropdown">
+      <button data-exp="png">当前页 PNG…</button>
+      <button data-exp="jpg">当前页 JPG…</button>
+      <button data-exp="pdf">整本 PDF…</button>
+      <button data-exp="xopp">整本 Xournal++ (.xopp)…</button>
+    </div>
   </div>
 </header>
 
@@ -81,8 +103,10 @@
 </div>
 
 <div id="toast" class="toast"></div>
+<div id="busy" class="busy hidden"><div class="spinner"></div><span id="busyText">处理中…</span></div>
 
 <script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>

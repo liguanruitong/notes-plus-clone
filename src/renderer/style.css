@@ -50,6 +50,38 @@ body {
 #sizeRange { width: 90px; accent-color: var(--accent); }
 #sizeVal { width: 18px; text-align: center; color: var(--tb-dim); }
 
+/* 自定义笔盘 */
+.pentray { background: var(--tb-bg2); border-radius: 10px; padding: 3px 5px; }
+.pens { display: flex; gap: 3px; align-items: center; }
+.pen {
+  position: relative; width: 30px; height: 34px; border: none; background: none;
+  border-radius: 7px; cursor: pointer; display: flex; align-items: flex-end;
+  justify-content: center; padding-bottom: 6px; transition: .12s;
+}
+.pen:hover { background: rgba(255,255,255,.08); }
+.pen.on { background: var(--accent); }
+.pen .nib { display: block; width: 20px; border-radius: 4px; min-height: 2px; }
+.pen.hl .nib { border-radius: 2px; opacity: .8; }
+.pen::before {
+  content: ""; position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
+  width: 3px; height: 12px; background: currentColor; opacity: .25; border-radius: 2px;
+}
+
+/* 下拉菜单（导入 / 导出） */
+.menu-wrap { position: relative; }
+.dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0; min-width: 190px;
+  background: var(--tb-bg2); border: 1px solid var(--tb-line); border-radius: 10px;
+  padding: 6px; display: none; flex-direction: column; gap: 2px; z-index: 100;
+  box-shadow: 0 10px 30px rgba(0,0,0,.45);
+}
+.dropdown.open { display: flex; }
+.dropdown button {
+  background: none; border: none; color: var(--tb-text); text-align: left;
+  padding: 9px 12px; border-radius: 7px; cursor: pointer; font: inherit;
+}
+.dropdown button:hover { background: var(--accent); }
+
 select {
   background: var(--tb-bg2); color: var(--tb-text); border: 1px solid var(--tb-line);
   border-radius: 8px; padding: 7px 8px; font: inherit; cursor: pointer;
@@ -93,3 +125,16 @@ select {
   font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; font-size: 12.5px; z-index: 50;
 }
 .toast.show { opacity: 1; }
+
+/* busy 遮罩 */
+.busy {
+  position: fixed; inset: 0; background: rgba(20,22,28,.55); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  z-index: 200; color: var(--tb-text); font-weight: 600; font-size: 14px;
+}
+.busy.hidden { display: none; }
+.spinner {
+  width: 26px; height: 26px; border: 3px solid rgba(255,255,255,.25);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
