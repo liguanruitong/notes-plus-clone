@@ -98,6 +98,13 @@
       <div id="myPens" class="my-pens"></div>
     </div>
     <div id="penEdit" class="pen-edit hidden">
+      <div id="penKind" class="pen-kind">
+        <button class="kind" data-kind="fountain">钢笔</button>
+        <button class="kind" data-kind="marker">马克笔</button>
+        <button class="kind" data-kind="ballpoint">圆珠笔</button>
+        <button class="kind" data-kind="highlighter">荧光笔</button>
+        <button class="kind" data-kind="pencil">铅笔</button>
+      </div>
       <div class="pop-row">
         <input type="color" id="colorCustom" value="#1c1c1e">
         <div id="palette" class="palette"></div>
@@ -112,6 +119,18 @@
         <button id="btnDelPen" class="mini-btn danger">删除此笔</button>
       </div>
     </div>
+    <div class="pop-sec" id="eraserSec">
+      <div class="pop-label">橡皮擦</div>
+      <div class="seg" id="eraserMode">
+        <button class="seg-btn on" data-mode="stroke">整笔擦除</button>
+        <button class="seg-btn" data-mode="pixel">像素擦除</button>
+      </div>
+      <div class="pop-row">
+        <span class="mini">大小</span>
+        <input type="range" id="eraserSize" min="8" max="60" value="18">
+        <span id="eraserVal">18</span>
+      </div>
+    </div>
     <div class="pop-sec">
       <div class="pop-label">纸张模板</div>
       <div id="tplGrid" class="tpl-grid"></div>
@@ -119,6 +138,49 @@
     </div>
   </div>
 </section>
+
+<!-- ═══════════ 自定义模板编辑器 ═══════════ -->
+<div id="tplEditor" class="tpl-editor hidden">
+  <div class="te-card">
+    <div class="te-head">
+      <button id="teCancel" class="te-x">取消</button>
+      <span class="te-title">自定义模板</span>
+      <button id="teSave" class="te-save">保存</button>
+    </div>
+    <div class="te-body">
+      <div class="te-preview-wrap"><canvas id="tePreview" width="300" height="424"></canvas>
+        <div id="teGuideHint" class="te-hint hidden">点击预览添加参考线</div>
+      </div>
+      <div class="te-controls">
+        <label class="te-field"><span>名称</span><input type="text" id="teName" placeholder="我的模板" value="我的模板"></label>
+        <div class="te-field"><span>底纹</span>
+          <div class="seg te-base" id="teBase">
+            <button class="seg-btn on" data-base="blank">空白</button>
+            <button class="seg-btn" data-base="lined">横线</button>
+            <button class="seg-btn" data-base="grid">网格</button>
+            <button class="seg-btn" data-base="dots">点阵</button>
+          </div>
+        </div>
+        <label class="te-field te-slider"><span>密度 <em id="teSpacingVal">46</em></span>
+          <input type="range" id="teSpacing" min="20" max="90" value="46"></label>
+        <div class="te-field te-colors">
+          <label><span>纸色</span><input type="color" id="tePaper" value="#ffffff"></label>
+          <label><span>线色</span><input type="color" id="teLine" value="#c9d6e5"></label>
+          <label><span>参考线色</span><input type="color" id="teGuideColor" value="#e2453b"></label>
+        </div>
+        <div class="te-field te-guides">
+          <span>参考线</span>
+          <div class="te-guide-btns">
+            <button id="teAddH" class="mini-btn">＋ 水平线</button>
+            <button id="teAddV" class="mini-btn">＋ 垂直线</button>
+            <button id="teClearG" class="mini-btn danger">清空</button>
+          </div>
+          <div id="teGuideList" class="te-guide-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════ 通用弹出菜单（笔记本 ⋯） ═══════════ -->
 <div id="ctxMenu" class="ctx-menu hidden"></div>

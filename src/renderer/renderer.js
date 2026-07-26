@@ -7,12 +7,14 @@ const PAGE_W = 1240, PAGE_H = 1754;
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
 
 let state = { notebooks: [], activeNotebook: null, settings: {} };
+let folders = [];       // 书架文件夹
 let nb = null;          // 当前打开的 notebook
 let pageIdx = 0;
 let tool = "pen", color = "#1a1a1a", size = 3;
 let zoom = 1, panX = 0, panY = 0;
 let pens = [], activePen = 0;
 let customTemplates = [];
+let eraserMode = "stroke", eraserSize = 18;   // stroke=整笔 / pixel=像素
 const bgCache = new Map();
 
 const undoStack = [], redoStack = [];
@@ -29,14 +31,18 @@ async function init() {
   const s = state.settings;
   tool = s.lastTool || "pen"; color = s.lastColor || "#1a1a1a"; size = s.lastSize || 3;
   pens = s.pens || []; activePen = s.activePen || 0; customTemplates = s.customTemplates || [];
+  eraserMode = s.eraserMode || "stroke"; eraserSize = s.eraserSize || 18;
+  folders = s.folders || [];
+  // 迁移：给旧数据补 kind
+  pens.forEach((p) => { if (!p.kind) p.kind = p.tool === "highlighter" ? "highlighter" : "fountain"; });
   if (!pens.length) {
-    // 预置笔盘：黑钢笔 / 红马克 / 蓝圆珠 / 黄荧光 / 灰铅笔
+    // 预置笔盘：钢笔 / 马克笔 / 圆珠笔 / 荧光笔 / 铅笔
     pens = [
-      { tool: "pen", color: "#1c1c1e", size: 3 },
-      { tool: "pen", color: "#e2453b", size: 5 },
-      { tool: "pen", color: "#0a84ff", size: 3 },
-      { tool: "highlighter", color: "#ffd60a", size: 16 },
-      { tool: "pen", color: "#8e8e93", size: 2 },
+      { kind: "fountain",    tool: "pen",         color: "#1c1c1e", size: 3 },
+      { kind: "marker",      tool: "pen",         color: "#e2453b", size: 8 },
+      { kind: "ballpoint",   tool: "pen",         color: "#0a84ff", size: 2 },
+      { kind: "highlighter", tool: "highlighter", color: "#ffd60a", size: 16 },
+      { kind: "pencil",      tool: "pen",         color: "#8e8e93", size: 2 },
     ];
     window.api.updateSettings({ pens, activePen: 0 });
   }
@@ -49,6 +55,7 @@ async function init() {
   bindMenus();
   bindDrawing();
   bindKeys();
+  bindTemplateEditor();
   buildPalette();
 
   renderShelf();
@@ -168,53 +175,110 @@ function darken(hex, f = 0.7) {
   const r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
   return `rgb(${r},${g},${b})`;
 }
+const PEN_KINDS = { fountain: "钢笔", marker: "马克笔", ballpoint: "圆珠笔", highlighter: "荧光笔", pencil: "铅笔" };
+// 把每支笔画成真实的拟物笔（SVG）：笔杆=主色，笔尖随类型不同
+function penSVG(p) {
+  const kind = p.kind || (p.tool === "highlighter" ? "highlighter" : "fountain");
+  const body = p.color, dark = darken(p.color, .62), tipDark = darken(p.color, .42);
+  if (kind === "highlighter") {
+    // 粗胖荧光笔：半透明宽笔尖 + 方肩笔身
+    return `<svg viewBox="0 0 26 74" aria-label="荧光笔">
+      <rect x="6" y="60" width="14" height="12" rx="2" fill="${body}" opacity=".55"/>
+      <path d="M6 62 L20 62 L17 72 L9 72 Z" fill="${body}" opacity=".85"/>
+      <rect x="5" y="10" width="16" height="52" rx="4" fill="${body}"/>
+      <rect x="5" y="10" width="6" height="52" rx="4" fill="#ffffff" opacity=".28"/>
+      <rect x="5" y="6" width="16" height="8" rx="3" fill="${dark}"/>
+    </svg>`;
+  }
+  if (kind === "pencil") {
+    // 铅笔：木质笔尖 + 石墨尖 + 六角笔身
+    return `<svg viewBox="0 0 22 74" aria-label="铅笔">
+      <path d="M11 72 L6 62 L16 62 Z" fill="#e8c9a0"/>
+      <path d="M11 72 L8.5 67 L13.5 67 Z" fill="${tipDark}"/>
+      <rect x="5" y="12" width="12" height="50" fill="${body}"/>
+      <rect x="5" y="12" width="4" height="50" fill="#ffffff" opacity=".25"/>
+      <rect x="13" y="12" width="4" height="50" fill="#000000" opacity=".14"/>
+      <rect x="5" y="6" width="12" height="8" rx="1.5" fill="#f5b8c0"/>
+      <rect x="5" y="4" width="12" height="4" rx="2" fill="#d1d1d6"/>
+    </svg>`;
+  }
+  if (kind === "marker") {
+    // 马克笔：宽扁笔尖 + 粗笔身
+    return `<svg viewBox="0 0 26 74" aria-label="马克笔">
+      <path d="M7 72 L19 72 L16 60 L10 60 Z" fill="${tipDark}"/>
+      <rect x="6" y="14" width="14" height="48" rx="3" fill="${body}"/>
+      <rect x="6" y="14" width="5" height="48" rx="3" fill="#ffffff" opacity=".22"/>
+      <rect x="5" y="8" width="16" height="8" rx="3" fill="${dark}"/>
+    </svg>`;
+  }
+  if (kind === "ballpoint") {
+    // 圆珠笔：细笔身 + 锥形金属尖 + 圆珠
+    return `<svg viewBox="0 0 20 74" aria-label="圆珠笔">
+      <path d="M10 72 L7 60 L13 60 Z" fill="${tipDark}"/>
+      <circle cx="10" cy="71" r="1.6" fill="${dark}"/>
+      <path d="M6 60 L14 60 L13 52 L7 52 Z" fill="#c8ccd2"/>
+      <rect x="6" y="10" width="8" height="42" rx="3" fill="${body}"/>
+      <rect x="6" y="10" width="3" height="42" rx="3" fill="#ffffff" opacity=".3"/>
+      <rect x="5.5" y="6" width="9" height="6" rx="3" fill="${dark}"/>
+    </svg>`;
+  }
+  // fountain（钢笔）：金属笔尖 + 优雅笔身
+  return `<svg viewBox="0 0 22 74" aria-label="钢笔">
+    <path d="M11 73 L7 58 L15 58 Z" fill="${tipDark}"/>
+    <rect x="10.2" y="61" width="1.6" height="12" fill="${darken(p.color,.25)}"/>
+    <path d="M7 58 L15 58 L13.5 50 L8.5 50 Z" fill="#c8ccd2"/>
+    <rect x="6.5" y="10" width="9" height="40" rx="4" fill="${body}"/>
+    <rect x="6.5" y="10" width="3.4" height="40" rx="4" fill="#ffffff" opacity=".3"/>
+    <rect x="6" y="5" width="10" height="8" rx="4" fill="${dark}"/>
+    <rect x="14.2" y="16" width="2.2" height="22" rx="1" fill="#d1d1d6"/>
+  </svg>`;
+}
+function penButton(p, i, on) {
+  const hl = p.kind === "highlighter" ? "hl" : "";
+  const label = `${PEN_KINDS[p.kind] || "笔"} · ${p.size}px`;
+  return `<button class="pen ${on ? "on" : ""} ${hl}" data-i="${i}" title="${label}">${penSVG(p)}</button>`;
+}
 function buildPens() {
-  $("#penRack").innerHTML = pens.map((p, i) => {
-    const hl = p.tool === "highlighter" ? "hl" : "";
-    const tip = p.tool === "highlighter" ? p.color : darken(p.color, .6);
-    return `<button class="pen ${i === activePen && tool !== "eraser" && tool !== "lasso" && tool !== "text" && tool !== "shape" && tool !== "pan" ? "on" : ""} ${hl}" data-i="${i}" title="${p.tool === "highlighter" ? "荧光笔" : "钢笔"} · ${p.size}px">
-      <span class="tip" style="border-bottom:6px solid ${tip}"></span>
-      <span class="nibdot" style="background:${darken(p.color,.4)}"></span>
-      <span class="body" style="background:${p.color}"></span>
-    </button>`;
-  }).join("");
+  const drawingActive = !["eraser", "lasso", "text", "shape", "pan"].includes(tool);
+  $("#penRack").innerHTML = pens.map((p, i) => penButton(p, i, i === activePen && drawingActive)).join("");
   $$("#penRack .pen").forEach((el) => el.addEventListener("click", () => usePen(+el.dataset.i)));
   renderMyPens();
 }
 // 「更多」面板里的“我的笔”：同一批拟物笔 + 末尾一个＋新增
 function renderMyPens() {
   const box = $("#myPens"); if (!box) return;
-  box.innerHTML = pens.map((p, i) => {
-    const hl = p.tool === "highlighter" ? "hl" : "";
-    const tip = p.tool === "highlighter" ? p.color : darken(p.color, .6);
-    return `<button class="pen ${i === activePen ? "on" : ""} ${hl}" data-i="${i}" title="${p.tool === "highlighter" ? "荧光笔" : "钢笔"} · ${p.size}px">
-      <span class="tip" style="border-bottom:6px solid ${tip}"></span>
-      <span class="nibdot" style="background:${darken(p.color, .4)}"></span>
-      <span class="body" style="background:${p.color}"></span>
-    </button>`;
-  }).join("") + `<button id="btnAddPen" class="pen-add" title="新增笔">＋</button>`;
+  box.innerHTML = pens.map((p, i) => penButton(p, i, i === activePen)).join("")
+    + `<button id="btnAddPen" class="pen-add" title="新增笔">＋</button>`;
   $$("#myPens .pen").forEach((el) => el.addEventListener("click", () => { usePen(+el.dataset.i); openPenEdit(); }));
   const add = $("#myPens .pen-add"); if (add) add.addEventListener("click", addPen);
 }
 function openPenEdit() { const pe = $("#penEdit"); if (pe) pe.classList.remove("hidden"); }
+let penKind = "fountain";
 function usePen(i) {
   const p = pens[i]; if (!p) return;
-  activePen = i; tool = p.tool; color = p.color; size = p.size;
+  activePen = i; tool = p.tool; color = p.color; size = p.size; penKind = p.kind || "fountain";
   selectTool(tool);
   setColor(color);
   $("#sizeRange").value = size; $("#sizeVal").textContent = size;
+  syncPenKindUI();
   buildPens();
   window.api.updateSettings({ activePen });
 }
+function penFromCurrent() {
+  return { kind: penKind, tool: penKind === "highlighter" ? "highlighter" : "pen", color, size };
+}
 function addPen() {
-  pens.push({ tool: tool === "highlighter" ? "highlighter" : "pen", color, size });
+  pens.push(penFromCurrent());
   activePen = pens.length - 1; buildPens();
   window.api.updateSettings({ pens, activePen }); toast("已存入笔盘");
 }
 function editPen() {
   if (!pens[activePen]) return;
-  pens[activePen] = { tool: tool === "highlighter" ? "highlighter" : "pen", color, size };
-  buildPens(); window.api.updateSettings({ pens }); toast("已更新此笔");
+  pens[activePen] = penFromCurrent();
+  tool = pens[activePen].tool; buildPens(); window.api.updateSettings({ pens }); toast("已更新此笔");
+}
+function syncPenKindUI() {
+  $$("#penKind .kind").forEach((el) => el.classList.toggle("on", el.dataset.kind === penKind));
 }
 function delPen() {
   if (pens.length <= 1) return;
@@ -246,7 +310,23 @@ function bindMorePanel() {
   $("#sizeRange").addEventListener("input", (e) => { size = +e.target.value; $("#sizeVal").textContent = size; persistSettings(); });
   $("#btnEditPen").addEventListener("click", editPen);
   $("#btnDelPen").addEventListener("click", delPen);
-  $("#btnNewTpl").addEventListener("click", newTemplate);
+  $("#btnNewTpl").addEventListener("click", openTemplateEditor);
+  // 笔类型切换
+  $$("#penKind .kind").forEach((el) => el.addEventListener("click", () => {
+    penKind = el.dataset.kind;
+    if (penKind === "highlighter") { tool = "highlighter"; } else { tool = "pen"; }
+    syncPenKindUI(); selectTool(tool);
+  }));
+  // 橡皮模式 / 大小
+  $$("#eraserMode .seg-btn").forEach((el) => el.addEventListener("click", () => {
+    eraserMode = el.dataset.mode;
+    $$("#eraserMode .seg-btn").forEach((b) => b.classList.toggle("on", b === el));
+    window.api.updateSettings({ eraserMode });
+  }));
+  $("#eraserSize").addEventListener("input", (e) => {
+    eraserSize = +e.target.value; $("#eraserVal").textContent = eraserSize;
+    window.api.updateSettings({ eraserSize });
+  });
   document.addEventListener("click", (e) => {
     if (!$("#morePanel").contains(e.target) && e.target.id !== "btnMore") $("#morePanel").classList.add("hidden");
   });
@@ -255,8 +335,15 @@ function selectTool(t) {
   tool = t;
   clearSelection();
   $$("#dock .tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
-  const drawingTool = !["eraser", "lasso", "text", "shape", "pan"].includes(t);
   buildPens();
+  // 更多面板：橡皮工具时显示橡皮设置、隐藏笔编辑
+  const es = $("#eraserSec"), pe = $("#penEdit");
+  if (es) es.classList.toggle("hidden", t !== "eraser");
+  if (pe && t === "eraser") pe.classList.add("hidden");
+  if (t === "eraser") {
+    $("#eraserSize").value = eraserSize; $("#eraserVal").textContent = eraserSize;
+    $$("#eraserMode .seg-btn").forEach((b) => b.classList.toggle("on", b.dataset.mode === eraserMode));
+  }
   textLayer.style.pointerEvents = t === "text" ? "auto" : "none";
   ink.style.cursor = t === "pan" ? "grab" : t === "text" ? "text" : "crosshair";
   persistSettings();
@@ -328,7 +415,7 @@ function onDown(e) {
   }
   drawing = true;
   cur = { tool: tool === "highlighter" ? "highlighter" : "pen", color, size, points: [pt] };
-  if (tool === "eraser") { drawing = true; cur = { tool: "eraser", points: [pt] }; eraseAt(pt); }
+  if (tool === "eraser") { drawing = true; cur = { tool: "eraser", points: [pt] }; erasedThisStroke = false; eraseAt(pt); drawEraserCursor(pt); }
 }
 function onMove(e) {
   const pt = toLogical(e);
@@ -339,7 +426,7 @@ function onMove(e) {
     return;
   }
   if (!drawing) return;
-  if (tool === "eraser") { cur.points.push(pt); eraseAt(pt); return; }
+  if (tool === "eraser") { cur.points.push(pt); eraseAt(pt); drawEraserCursor(pt); return; }
   cur.points.push(pt); drawStrokeLive();
 }
 function onUp() {
@@ -351,7 +438,7 @@ function onUp() {
   }
   if (!drawing) return;
   drawing = false;
-  if (tool === "eraser") { cur = null; return; }
+  if (tool === "eraser") { cur = null; octx.clearRect(0, 0, PAGE_W, PAGE_H); if (erasedThisStroke) { save(); renderThumbs(); } erasedThisStroke = false; return; }
   if (cur && cur.points.length) {
     if (tool === "shape") cur = recognizeShape(cur);
     pushUndo(); curPage().strokes.push(cur); save(); renderInk(); renderThumbs();
@@ -383,10 +470,43 @@ function drawStrokeLive() {
   for (const s of curPage().strokes) strokePath(ictx, s);
   if (cur) strokePath(ictx, cur);
 }
+let erasedThisStroke = false;
 function eraseAt(pt) {
-  const r = 14; const strokes = curPage().strokes; let hit = -1;
+  const r = eraserMode === "pixel" ? eraserSize / 2 : 14;
+  const strokes = curPage().strokes;
+  if (eraserMode === "pixel") {
+    let changed = false; const out = [];
+    for (const s of strokes) {
+      const hit = s.points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r + s.size);
+      if (!hit) { out.push(s); continue; }
+      changed = true;
+      // 把不在橡皮范围内的点切成若干段
+      let seg = [];
+      for (const p of s.points) {
+        if (Math.hypot(p.x - pt.x, p.y - pt.y) < r + s.size / 2) {
+          if (seg.length > 1) out.push({ ...s, points: seg });
+          seg = [];
+        } else seg.push(p);
+      }
+      if (seg.length > 1) out.push({ ...s, points: seg });
+    }
+    if (changed) {
+      if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; }
+      curPage().strokes = out; renderInk();
+    }
+    return;
+  }
+  // 整笔擦除
+  let hit = -1;
   for (let i = strokes.length - 1; i >= 0; i--) if (strokes[i].points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r)) { hit = i; break; }
   if (hit >= 0) { pushUndo(); strokes.splice(hit, 1); save(); renderInk(); renderThumbs(); }
+}
+
+function drawEraserCursor(pt) {
+  if (eraserMode !== "pixel") return;
+  octx.clearRect(0, 0, PAGE_W, PAGE_H);
+  octx.save(); octx.strokeStyle = "#ff3b30"; octx.lineWidth = 1.5 / zoom; octx.setLineDash([4 / zoom, 3 / zoom]);
+  octx.beginPath(); octx.arc(pt.x, pt.y, eraserSize / 2, 0, Math.PI * 2); octx.stroke(); octx.restore();
 }
 
 // ═══════════ 套索选择 ═══════════
@@ -548,26 +668,40 @@ function closeText() { if (document.activeElement && document.activeElement.clas
 
 // ═══════════ 纸张模板 ═══════════
 function baseOf(tpl) {
-  if (["blank", "lined", "grid", "cornell"].includes(tpl)) return tpl;
+  if (["blank", "lined", "grid", "cornell", "dots"].includes(tpl)) return tpl;
   const c = customTemplates.find((t) => t.id === tpl); return c ? c.base : "blank";
 }
+function customOf(tpl) { return customTemplates.find((t) => t.id === tpl) || null; }
+// 画底纹（供内建 & 自定义共用）：cfg = {base, spacing, paperColor, lineColor, guideColor, guides}
+function paintPattern(cx, cfg) {
+  const { base = "blank", spacing = 46, paperColor = "#ffffff", lineColor = "#c9d6e5", guideColor = "#e2453b", guides = [] } = cfg;
+  cx.fillStyle = paperColor; cx.fillRect(0, 0, PAGE_W, PAGE_H);
+  cx.strokeStyle = lineColor; cx.lineWidth = 1;
+  if (base === "lined") { for (let y = spacing; y < PAGE_H; y += spacing) line(cx, 50, y, PAGE_W - 50, y); }
+  else if (base === "grid") { for (let x = spacing; x < PAGE_W; x += spacing) line(cx, x, 0, x, PAGE_H); for (let y = spacing; y < PAGE_H; y += spacing) line(cx, 0, y, PAGE_W, y); }
+  else if (base === "dots") {
+    cx.fillStyle = lineColor;
+    for (let x = spacing; x < PAGE_W; x += spacing) for (let y = spacing; y < PAGE_H; y += spacing) { cx.beginPath(); cx.arc(x, y, 2, 0, Math.PI * 2); cx.fill(); }
+  } else if (base === "cornell") {
+    for (let x = spacing; x < PAGE_W; x += spacing) line(cx, x, 0, x, PAGE_H);
+    for (let y = spacing; y < PAGE_H; y += spacing) line(cx, 0, y, PAGE_W, y);
+    cx.strokeStyle = guideColor; cx.lineWidth = 2.5;
+    line(cx, PAGE_W - 320, 0, PAGE_W - 320, PAGE_H - 300);
+    line(cx, 0, PAGE_H - 300, PAGE_W, PAGE_H - 300);
+  }
+  // 用户添加的参考线
+  if (guides.length) {
+    cx.strokeStyle = guideColor; cx.lineWidth = 2;
+    for (const g of guides) g.type === "h" ? line(cx, 0, g.pos, PAGE_W, g.pos) : line(cx, g.pos, 0, g.pos, PAGE_H);
+  }
+}
 function paintTemplate(cx, page) {
-  cx.fillStyle = "#ffffff"; cx.fillRect(0, 0, PAGE_W, PAGE_H);
+  const tpl = page.template || "blank";
+  const custom = customOf(tpl);
+  if (custom) paintPattern(cx, custom);
+  else paintPattern(cx, { base: baseOf(tpl) });
   const img = getBg(page);
   if (img && img.complete && img.naturalWidth) { const sc = PAGE_W / img.naturalWidth; cx.drawImage(img, 0, 0, PAGE_W, img.naturalHeight * sc); }
-  const b = baseOf(page.template || "blank");
-  cx.strokeStyle = "#c9d6e5"; cx.lineWidth = 1;
-  if (b === "lined") { for (let y = 90; y < PAGE_H; y += 46) line(cx, 50, y, PAGE_W - 50, y); }
-  else if (b === "grid") { for (let x = 46; x < PAGE_W; x += 46) line(cx, x, 0, x, PAGE_H); for (let y = 46; y < PAGE_H; y += 46) line(cx, 0, y, PAGE_W, y); }
-  else if (b === "cornell") {
-    // 网格纸 + 右侧竖线 + 下方横线（康奈尔）
-    for (let x = 46; x < PAGE_W; x += 46) line(cx, x, 0, x, PAGE_H);
-    for (let y = 46; y < PAGE_H; y += 46) line(cx, 0, y, PAGE_W, y);
-    cx.strokeStyle = "#e2453b"; cx.lineWidth = 2.5;
-    const cueX = PAGE_W - 320, sumY = PAGE_H - 300;
-    line(cx, cueX, 0, cueX, sumY);   // 右侧竖线（提示栏）
-    line(cx, 0, sumY, PAGE_W, sumY); // 下方横线（总结栏）
-  }
 }
 function line(cx, x0, y0, x1, y1) { cx.beginPath(); cx.moveTo(x0, y0); cx.lineTo(x1, y1); cx.stroke(); }
 function getBg(page) {
@@ -589,18 +723,67 @@ function buildTemplatePicker() {
   });
 }
 function setTemplate(t) { curPage().template = t; save(); drawPaper(); renderThumbs(); buildTemplatePicker(); }
-async function newTemplate() {
-  const name = await modalInput({ title: "新建模板", value: "我的模板", placeholder: "模板名称" }); if (!name || !name.trim()) return;
-  const base = await modalSwatch({ title: "选择底纹", desc: "空白 / 横线 / 网格 / 康奈尔", colors: ["blank", "lined", "grid", "cornell"], current: "grid" });
-  const baseVal = ["blank", "lined", "grid", "cornell"].includes(base) ? base : "grid";
-  const t = { id: await uid(), name: name.trim(), base: baseVal };
-  customTemplates.push(t); window.api.updateSettings({ customTemplates });
-  setTemplate(t.id); toast("模板已创建");
-}
 function delTemplate(id) {
   customTemplates = customTemplates.filter((t) => t.id !== id);
   window.api.updateSettings({ customTemplates });
   if (curPage().template === id) setTemplate("blank"); else buildTemplatePicker();
+}
+
+// ═══════════ 自定义模板编辑器 ═══════════
+let teCfg = null;
+function openTemplateEditor() {
+  $("#morePanel").classList.add("hidden");
+  teCfg = { base: "grid", spacing: 46, paperColor: "#ffffff", lineColor: "#c9d6e5", guideColor: "#e2453b", guides: [] };
+  $("#teName").value = "我的模板";
+  $$("#teBase .seg-btn").forEach((b) => b.classList.toggle("on", b.dataset.base === teCfg.base));
+  $("#teSpacing").value = teCfg.spacing; $("#teSpacingVal").textContent = teCfg.spacing;
+  $("#tePaper").value = teCfg.paperColor; $("#teLine").value = teCfg.lineColor; $("#teGuideColor").value = teCfg.guideColor;
+  renderTeGuides(); drawTePreview();
+  $("#tplEditor").classList.remove("hidden");
+}
+function closeTemplateEditor() { $("#tplEditor").classList.add("hidden"); teCfg = null; }
+function drawTePreview() {
+  const c = $("#tePreview"), cx = c.getContext("2d");
+  cx.setTransform(1, 0, 0, 1, 0, 0); cx.clearRect(0, 0, c.width, c.height);
+  cx.scale(c.width / PAGE_W, c.height / PAGE_H);
+  paintPattern(cx, teCfg);
+}
+function renderTeGuides() {
+  const list = $("#teGuideList");
+  list.innerHTML = teCfg.guides.map((g, i) =>
+    `<div class="te-guide-row"><span>${g.type === "h" ? "水平" : "垂直"}</span>
+     <input type="range" min="0" max="${g.type === "h" ? PAGE_H : PAGE_W}" value="${g.pos}" data-i="${i}">
+     <button class="te-gdel" data-del="${i}">✕</button></div>`).join("");
+  $$("#teGuideList input").forEach((el) => el.addEventListener("input", () => { teCfg.guides[+el.dataset.i].pos = +el.value; drawTePreview(); }));
+  $$("#teGuideList .te-gdel").forEach((el) => el.addEventListener("click", () => { teCfg.guides.splice(+el.dataset.del, 1); renderTeGuides(); drawTePreview(); }));
+}
+function bindTemplateEditor() {
+  $$("#teBase .seg-btn").forEach((el) => el.addEventListener("click", () => {
+    teCfg.base = el.dataset.base; $$("#teBase .seg-btn").forEach((b) => b.classList.toggle("on", b === el)); drawTePreview();
+  }));
+  $("#teSpacing").addEventListener("input", (e) => { teCfg.spacing = +e.target.value; $("#teSpacingVal").textContent = teCfg.spacing; drawTePreview(); });
+  $("#tePaper").addEventListener("input", (e) => { teCfg.paperColor = e.target.value; drawTePreview(); });
+  $("#teLine").addEventListener("input", (e) => { teCfg.lineColor = e.target.value; drawTePreview(); });
+  $("#teGuideColor").addEventListener("input", (e) => { teCfg.guideColor = e.target.value; drawTePreview(); });
+  $("#teAddH").addEventListener("click", () => { teCfg.guides.push({ type: "h", pos: Math.round(PAGE_H / 2) }); renderTeGuides(); drawTePreview(); });
+  $("#teAddV").addEventListener("click", () => { teCfg.guides.push({ type: "v", pos: Math.round(PAGE_W / 2) }); renderTeGuides(); drawTePreview(); });
+  $("#teClearG").addEventListener("click", () => { teCfg.guides = []; renderTeGuides(); drawTePreview(); });
+  // 点击预览添加参考线（就近判断加水平还是垂直：取离边更近的方向）
+  $("#tePreview").addEventListener("click", (e) => {
+    const r = e.target.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width * PAGE_W, y = (e.clientY - r.top) / r.height * PAGE_H;
+    // 竖直优先当点靠近左右，否则水平
+    if (Math.min(x, PAGE_W - x) < Math.min(y, PAGE_H - y)) teCfg.guides.push({ type: "v", pos: Math.round(x) });
+    else teCfg.guides.push({ type: "h", pos: Math.round(y) });
+    renderTeGuides(); drawTePreview();
+  });
+  $("#teCancel").addEventListener("click", closeTemplateEditor);
+  $("#teSave").addEventListener("click", async () => {
+    const name = ($("#teName").value || "").trim() || "我的模板";
+    const t = { id: await uid(), name, ...teCfg };
+    customTemplates.push(t); window.api.updateSettings({ customTemplates });
+    closeTemplateEditor(); setTemplate(t.id); toast("模板已创建");
+  });
 }
 
 // ═══════════ 渲染 ═══════════

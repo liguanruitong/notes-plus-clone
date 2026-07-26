@@ -159,16 +159,19 @@ svg.i16 { width: 16px; height: 16px; }
 .dk.tool.active { color: var(--accent); background: rgba(0,122,255,.12); }
 .dk-sep { width: 1px; height: 24px; background: var(--line); flex-shrink: 0; }
 
-/* 笔架：把每支笔画成真实的笔（SVG） */
-.pen-rack { display: flex; align-items: flex-end; gap: 3px; height: 54px; }
+/* 笔架：把每支笔画成真实的拟物笔（SVG） */
+.pen-rack { display: flex; align-items: flex-end; gap: 4px; height: 54px; overflow: visible; padding: 0 2px; }
 .pen {
-  position: relative; width: 20px; height: 46px; border: none; background: none;
-  cursor: pointer; padding: 0; transition: transform .15s ease; align-self: flex-end;
+  position: relative; width: 24px; height: 52px; border: none; background: none;
+  cursor: pointer; padding: 0; transition: transform .18s cubic-bezier(.34,1.56,.64,1); align-self: flex-end;
   display: flex; align-items: flex-end; justify-content: center;
 }
-.pen svg { width: 20px; height: 46px; stroke: none; }
-.pen:hover { transform: translateY(-3px); }
-.pen.on { transform: translateY(-8px); }   /* ★ 选中笔上抬 8px */
+.pen svg { width: 24px; height: 52px; display: block;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.18)); overflow: visible; }
+.pen svg rect, .pen svg path, .pen svg circle { stroke: none; }
+.pen:hover { transform: translateY(-4px); }
+.pen.on { transform: translateY(-14px); }   /* ★ 选中笔明显上抬 */
+.pen.on svg { filter: drop-shadow(0 5px 5px rgba(0,0,0,.25)); }
 
 /* ═══════════ 「更多」弹层 ═══════════ */
 .popover {
@@ -206,6 +209,18 @@ svg.i16 { width: 16px; height: 16px; }
 .add-pen:hover { border-color: var(--accent); color: var(--accent); }
 
 .pen-edit { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: #F7F7F8; border-radius: 12px; }
+.pen-kind { display: flex; gap: 4px; flex-wrap: wrap; }
+.pen-kind .kind { flex: 1; min-width: 52px; padding: 6px 4px; border: 1px solid var(--line); background: #fff;
+  border-radius: 8px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; transition: .12s; }
+.pen-kind .kind:hover { border-color: var(--accent); }
+.pen-kind .kind.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* iOS 分段控件 */
+.seg { display: flex; background: #EFEFF4; border-radius: 9px; padding: 2px; }
+.seg-btn { flex: 1; border: none; background: none; padding: 7px; border-radius: 7px; font: inherit;
+  font-size: 13px; color: var(--text); cursor: pointer; transition: .15s; }
+.seg-btn.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
+#eraserSize { flex: 1; accent-color: var(--accent); }
+#eraserVal { width: 26px; text-align: center; color: var(--dim); }
 .palette { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; }
 .sw { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
 .sw.on { border-color: var(--text); }
@@ -228,6 +243,41 @@ svg.i16 { width: 16px; height: 16px; }
 .tpl .tn { position: absolute; bottom: 0; left: 0; right: 0; font-size: 9px; text-align: center; background: rgba(255,255,255,.85); color: #555; padding: 1px; }
 .tpl .tdel { position: absolute; top: 1px; right: 2px; font-size: 10px; color: var(--danger); cursor: pointer; opacity: 0; }
 .tpl:hover .tdel { opacity: 1; }
+
+/* ═══════════ 自定义模板编辑器 ═══════════ */
+.tpl-editor { position: fixed; inset: 0; z-index: 620; background: rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center; }
+.te-card { width: 720px; max-width: 94vw; max-height: 92vh; background: #fff; border-radius: 18px;
+  box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden; }
+.te-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
+  border-bottom: 1px solid var(--line); }
+.te-title { font-weight: 700; font-size: 16px; }
+.te-x, .te-save { border: none; background: none; font: inherit; font-size: 15px; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+.te-x { color: var(--dim); }
+.te-save { color: var(--accent); font-weight: 700; }
+.te-save:hover, .te-x:hover { background: rgba(0,0,0,.05); }
+.te-body { display: flex; gap: 20px; padding: 20px; overflow-y: auto; }
+.te-preview-wrap { position: relative; flex-shrink: 0; }
+#tePreview { width: 300px; height: 424px; border: 1px solid var(--line); border-radius: 8px; cursor: crosshair;
+  box-shadow: 0 4px 16px rgba(0,0,0,.1); }
+.te-hint { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); font-size: 11px;
+  color: var(--dim); background: rgba(255,255,255,.85); padding: 2px 8px; border-radius: 6px; }
+.te-controls { flex: 1; display: flex; flex-direction: column; gap: 16px; min-width: 260px; }
+.te-field { display: flex; flex-direction: column; gap: 8px; }
+.te-field > span { font-weight: 600; font-size: 13px; color: var(--text); }
+.te-field input[type=text] { border: 1px solid #D1D1D6; border-radius: 8px; padding: 8px 10px; font: inherit; outline: none; }
+.te-field input[type=text]:focus { border-color: var(--accent); }
+.te-slider span em { color: var(--accent); font-style: normal; }
+.te-slider input[type=range] { accent-color: var(--accent); width: 100%; }
+.te-colors { flex-direction: row; gap: 14px; }
+.te-colors label { display: flex; flex-direction: column; gap: 5px; align-items: center; font-size: 12px; color: var(--dim); }
+.te-colors input[type=color] { width: 42px; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0; cursor: pointer; background: none; }
+.te-guide-btns { display: flex; gap: 6px; }
+.te-guide-list { display: flex; flex-direction: column; gap: 6px; max-height: 120px; overflow-y: auto; }
+.te-guide-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
+.te-guide-row span { width: 30px; flex-shrink: 0; }
+.te-guide-row input[type=range] { flex: 1; accent-color: var(--accent); }
+.te-gdel { border: none; background: none; color: var(--danger); cursor: pointer; font-size: 13px; }
 
 /* ═══════════ 弹出菜单（笔记本 ⋯） ═══════════ */
 .ctx-menu {

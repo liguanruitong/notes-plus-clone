@@ -22,12 +22,14 @@ const store = new Store({
       lastSize: 3,
       activePen: 0,
       pens: [
-        { tool: "pen", color: "#1a1a1a", size: 3 },
-        { tool: "pen", color: "#e2453b", size: 3 },
-        { tool: "pen", color: "#2f7be6", size: 4 },
-        { tool: "highlighter", color: "#f5d90a", size: 6 },
+        { kind: "fountain",    tool: "pen",         color: "#1c1c1e", size: 3 },
+        { kind: "marker",      tool: "pen",         color: "#e2453b", size: 8 },
+        { kind: "ballpoint",   tool: "pen",         color: "#0a84ff", size: 2 },
+        { kind: "highlighter", tool: "highlighter", color: "#ffd60a", size: 16 },
+        { kind: "pencil",      tool: "pen",         color: "#8e8e93", size: 2 },
       ],
       customTemplates: [],
+      folders: [],
     },
   },
 });
