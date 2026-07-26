@@ -44,13 +44,15 @@ svg.i16 { width: 16px; height: 16px; }
 
 /* 文件夹卡片 */
 .folder-card { cursor: pointer; display: flex; flex-direction: column; gap: 10px; }
+/* 透明底：不要矩形背景色块，只显示文件夹图标本身 */
 .folder-ico { width: 172px; height: 224px; border-radius: 12px; position: relative;
   display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(160deg, #fbfbfd, #eef1f6); box-shadow: var(--shadow-card); transition: transform .14s; }
+  background: transparent; transition: transform .14s; }
 .folder-card:hover .folder-ico { transform: translateY(-3px); }
-.folder-ico svg { width: 108px; height: 90px; fill: var(--fc); stroke: none; filter: drop-shadow(0 3px 5px rgba(0,0,0,.12)); }
-.folder-ico .folder-cnt { position: absolute; bottom: 40px; right: 44px; color: #fff; font-weight: 700; font-size: 16px; }
-.folder-card.drop-hot .folder-ico { outline: 3px dashed var(--accent); outline-offset: -3px; transform: translateY(-3px) scale(1.02); }
+.folder-ico svg { width: 150px; height: 125px; fill: var(--fc); stroke: none; filter: drop-shadow(0 4px 8px rgba(0,0,0,.16)); }
+.folder-ico .folder-cnt { position: absolute; bottom: 52px; right: 52px; color: #fff; font-weight: 700; font-size: 18px; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.folder-card.drop-hot .folder-ico { transform: translateY(-3px) scale(1.04); }
+.folder-card.drop-hot .folder-ico svg { filter: drop-shadow(0 4px 10px rgba(0,122,255,.5)); }
 .nb-card.dragging { opacity: .45; }
 .pill-btn {
   display: flex; align-items: center; gap: 5px;
@@ -153,6 +155,56 @@ svg.i16 { width: 16px; height: 16px; }
 #ink     { z-index: 2; }
 #overlay { z-index: 3; pointer-events: none; }
 #textLayer { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+#coverLayer { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+#cardLayer { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+
+/* 挖空笔遮挡块：合上=不透明色块盖住；打开=半透明露出内容 */
+.cover-box { position: absolute; pointer-events: auto; cursor: pointer; border-radius: 6px;
+  background: var(--cc, #3c3c43); box-shadow: 0 1px 4px rgba(0,0,0,.25); transition: opacity .18s, background .18s; }
+.cover-box.open { background: transparent; opacity: .12; }
+.cover-box .cover-del { position: absolute; top: -9px; right: -9px; width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(0,0,0,.55); color: #fff; border: none; cursor: pointer; font-size: 11px; line-height: 1; opacity: 0; transition: .12s; }
+.cover-box:hover .cover-del { opacity: 1; }
+
+/* 卡片（便签） */
+.card-note { position: absolute; pointer-events: auto; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; overflow: hidden; min-width: 120px; min-height: 90px; }
+.card-bar { height: 20px; flex-shrink: 0; cursor: grab; background: rgba(0,0,0,.06); display: flex; align-items: center; justify-content: flex-end; padding: 0 4px; }
+.card-bar:active { cursor: grabbing; }
+.card-del { border: none; background: none; cursor: pointer; color: rgba(0,0,0,.4); font-size: 12px; line-height: 1; padding: 2px 4px; }
+.card-del:hover { color: var(--danger); }
+.card-body { flex: 1; padding: 8px 10px; outline: none; overflow-y: auto; font-size: 15px; color: #333; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+
+/* ═══════════ 内嵌小工具（计算器 / 计时器） ═══════════ */
+.mini-app { position: fixed; z-index: 120; background: #fff; border-radius: 16px; box-shadow: var(--shadow-pop);
+  width: 240px; overflow: hidden; top: 90px; left: 50%; transform: translateX(-50%); user-select: none; }
+.ma-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: grab;
+  background: #F7F7F8; font-weight: 600; font-size: 14px; }
+.ma-head:active { cursor: grabbing; }
+.ma-x { border: none; background: none; cursor: pointer; color: var(--dim); font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+.ma-x:hover { background: rgba(0,0,0,.08); color: var(--text); }
+.calc-screen { text-align: right; font-size: 30px; font-weight: 600; padding: 14px 18px; min-height: 30px;
+  overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.calc-keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); }
+.ck { border: none; background: #fff; padding: 16px 0; font: inherit; font-size: 18px; cursor: pointer; color: var(--text); transition: .1s; }
+.ck:hover { background: #F2F2F7; } .ck:active { background: #E5E5EA; }
+.ck.op { background: #F7F7F8; color: var(--accent); font-weight: 600; }
+.ck.fn { background: #F7F7F8; color: var(--dim); }
+.ck.eq { background: var(--accent); color: #fff; font-weight: 700; }
+.ck.eq:hover { filter: brightness(1.06); }
+.ck.zero { grid-column: span 2; }
+.timer-display { text-align: center; font-size: 46px; font-weight: 700; padding: 16px 0 8px; font-variant-numeric: tabular-nums; letter-spacing: 1px; }
+.timer-mode { margin: 0 14px 10px; }
+.timer-set { display: flex; gap: 6px; padding: 0 14px 10px; }
+.timer-ctrl { display: flex; gap: 8px; padding: 0 14px 16px; }
+
+/* 更多面板：小工具行 */
+.widget-row { display: flex; gap: 10px; }
+.widget-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px;
+  border: none; background: #F7F7F8; border-radius: 12px; cursor: pointer; color: var(--text); font: inherit; transition: .12s; }
+.widget-btn:hover { background: rgba(0,122,255,.1); color: var(--accent); }
+.widget-btn svg { width: 24px; height: 24px; }
+.widget-btn span { font-size: 12px; }
 .text-box {
   position: absolute; border: 1px dashed transparent; padding: 2px 4px; min-width: 40px;
   outline: none; white-space: pre-wrap; word-break: break-word; cursor: text; line-height: 1.3;

@@ -31,21 +31,22 @@ async function init() {
   const s = state.settings;
   tool = s.lastTool || "pen"; color = s.lastColor || "#1a1a1a"; size = s.lastSize || 3;
   pens = s.pens || []; activePen = s.activePen || 0; customTemplates = s.customTemplates || [];
-  eraserMode = s.eraserMode || "stroke"; eraserSize = s.eraserSize || 18;
+  eraserMode = s.eraserMode || "pixel"; eraserSize = s.eraserSize || 18;
   folders = s.folders || [];
-  // 迁移：给旧数据补 kind
-  pens.forEach((p) => { if (!p.kind) p.kind = p.tool === "highlighter" ? "highlighter" : "fountain"; });
-  if (!pens.length) {
-    // 预置笔盘：钢笔 / 马克笔 / 圆珠笔 / 荧光笔 / 铅笔
-    pens = [
-      { kind: "fountain",    tool: "pen",         color: "#1c1c1e", size: 3 },
-      { kind: "marker",      tool: "pen",         color: "#e2453b", size: 8 },
-      { kind: "ballpoint",   tool: "pen",         color: "#0a84ff", size: 2 },
-      { kind: "highlighter", tool: "highlighter", color: "#ffd60a", size: 16 },
-      { kind: "pencil",      tool: "pen",         color: "#8e8e93", size: 2 },
-    ];
+  // 迁移：只保留两种笔（笔 / 荧光笔）。检测到旧版多笔种预置则整体重置为新的两支
+  const legacy = pens.some((p) => ["fountain", "marker", "ballpoint", "pencil"].includes(p.kind));
+  const DEFAULT_PENS = [
+    { kind: "pen",         tool: "pen",         color: "#1c1c1e", size: 3 },
+    { kind: "highlighter", tool: "highlighter", color: "#ffd60a", size: 16 },
+  ];
+  if (!pens.length || legacy) {
+    pens = DEFAULT_PENS.map((p) => ({ ...p }));
+    activePen = 0;
     window.api.updateSettings({ pens, activePen: 0 });
+  } else {
+    pens.forEach((p) => { p.kind = (p.kind === "highlighter" || p.tool === "highlighter") ? "highlighter" : "pen"; });
   }
+  if (activePen >= pens.length) activePen = 0;
 
   for (const c of [paper, ink, overlay]) { c.width = PAGE_W; c.height = PAGE_H; }
   bindShelf();
@@ -57,6 +58,7 @@ async function init() {
   bindKeys();
   bindTemplateEditor();
   bindSelBar();
+  bindWidgets();
   buildToolGrid();
   buildPalette();
 
@@ -263,10 +265,10 @@ function darken(hex, f = 0.7) {
   const r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
   return `rgb(${r},${g},${b})`;
 }
-const PEN_KINDS = { fountain: "钢笔", marker: "马克笔", ballpoint: "圆珠笔", highlighter: "荧光笔", pencil: "铅笔" };
-// 把每支笔画成真实的拟物笔（SVG）：笔杆=主色，笔尖随类型不同
+const PEN_KINDS = { pen: "笔", highlighter: "荧光笔" };
+// 把每支笔画成真实的拟物笔（SVG）：笔杆=主色，笔尖随类型不同。仅两种：笔 / 荧光笔
 function penSVG(p) {
-  const kind = p.kind || (p.tool === "highlighter" ? "highlighter" : "fountain");
+  const kind = (p.kind === "highlighter" || p.tool === "highlighter") ? "highlighter" : "pen";
   const body = p.color, dark = darken(p.color, .62), tipDark = darken(p.color, .42);
   if (kind === "highlighter") {
     // 粗胖荧光笔：半透明宽笔尖 + 方肩笔身
@@ -278,40 +280,8 @@ function penSVG(p) {
       <rect x="5" y="6" width="16" height="8" rx="3" fill="${dark}"/>
     </svg>`;
   }
-  if (kind === "pencil") {
-    // 铅笔：木质笔尖 + 石墨尖 + 六角笔身
-    return `<svg viewBox="0 0 22 74" aria-label="铅笔">
-      <path d="M11 72 L6 62 L16 62 Z" fill="#e8c9a0"/>
-      <path d="M11 72 L8.5 67 L13.5 67 Z" fill="${tipDark}"/>
-      <rect x="5" y="12" width="12" height="50" fill="${body}"/>
-      <rect x="5" y="12" width="4" height="50" fill="#ffffff" opacity=".25"/>
-      <rect x="13" y="12" width="4" height="50" fill="#000000" opacity=".14"/>
-      <rect x="5" y="6" width="12" height="8" rx="1.5" fill="#f5b8c0"/>
-      <rect x="5" y="4" width="12" height="4" rx="2" fill="#d1d1d6"/>
-    </svg>`;
-  }
-  if (kind === "marker") {
-    // 马克笔：宽扁笔尖 + 粗笔身
-    return `<svg viewBox="0 0 26 74" aria-label="马克笔">
-      <path d="M7 72 L19 72 L16 60 L10 60 Z" fill="${tipDark}"/>
-      <rect x="6" y="14" width="14" height="48" rx="3" fill="${body}"/>
-      <rect x="6" y="14" width="5" height="48" rx="3" fill="#ffffff" opacity=".22"/>
-      <rect x="5" y="8" width="16" height="8" rx="3" fill="${dark}"/>
-    </svg>`;
-  }
-  if (kind === "ballpoint") {
-    // 圆珠笔：细笔身 + 锥形金属尖 + 圆珠
-    return `<svg viewBox="0 0 20 74" aria-label="圆珠笔">
-      <path d="M10 72 L7 60 L13 60 Z" fill="${tipDark}"/>
-      <circle cx="10" cy="71" r="1.6" fill="${dark}"/>
-      <path d="M6 60 L14 60 L13 52 L7 52 Z" fill="#c8ccd2"/>
-      <rect x="6" y="10" width="8" height="42" rx="3" fill="${body}"/>
-      <rect x="6" y="10" width="3" height="42" rx="3" fill="#ffffff" opacity=".3"/>
-      <rect x="5.5" y="6" width="9" height="6" rx="3" fill="${dark}"/>
-    </svg>`;
-  }
-  // fountain（钢笔）：金属笔尖 + 优雅笔身
-  return `<svg viewBox="0 0 22 74" aria-label="钢笔">
+  // 笔（普通实心笔）：实心笔尖 + 优雅笔身
+  return `<svg viewBox="0 0 22 74" aria-label="笔">
     <path d="M11 73 L7 58 L15 58 Z" fill="${tipDark}"/>
     <rect x="10.2" y="61" width="1.6" height="12" fill="${darken(p.color,.25)}"/>
     <path d="M7 58 L15 58 L13.5 50 L8.5 50 Z" fill="#c8ccd2"/>
@@ -349,6 +319,9 @@ const TOOL_DEFS = [
   { t: "lasso", name: "套索", svg: `<path d="M4 11c0-4 4-6 8-6s8 2 8 6-4 6-8 6c-1.5 0-2.8-.3-4-.7" stroke-dasharray="3 2.5"/><path d="M7 16c-1 .8-1 2.2 0 3"/>` },
   { t: "shape", name: "形状", svg: `<rect x="4" y="4" width="7" height="7" rx="1"/><circle cx="16.5" cy="7.5" r="3.5"/><path d="M4 20l4-6 4 6z"/>` },
   { t: "text",  name: "文字", svg: `<path d="M5 6h14M12 6v13M9 19h6"/>` },
+  { t: "cover", name: "挖空笔", svg: `<rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 12h16"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>` },
+  { t: "card",  name: "卡片", svg: `<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M7 9h10M7 13h6"/>` },
+  { t: "laser", name: "激光笔", svg: `<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>` },
   { t: "pan",   name: "平移", svg: `<path d="M12 3v18M3 12h18M8 7l4-4 4 4M8 17l4 4 4-4M7 8l-4 4 4 4M17 8l4 4-4 4"/>` },
   { t: "insert", name: "图片", svg: `<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-6 6"/>` },
 ];
@@ -358,16 +331,17 @@ function buildToolGrid() {
   $$("#toolGrid .tool-cell").forEach((el) => el.addEventListener("click", () => {
     const t = el.dataset.tool;
     if (t === "insert") { $("#morePanel").classList.add("hidden"); importImage(); return; }
+    if (t === "card") { $("#morePanel").classList.add("hidden"); addCard(); return; }
     if (t === "pen" || t === "highlighter") { usePenTool(t); } else selectTool(t);
     syncToolGrid();
   }));
   syncToolGrid();
 }
 function syncToolGrid() { $$("#toolGrid .tool-cell").forEach((el) => el.classList.toggle("active", el.dataset.tool === tool)); }
-let penKind = "fountain";
+let penKind = "pen";
 function usePen(i) {
   const p = pens[i]; if (!p) return;
-  activePen = i; tool = p.tool; color = p.color; size = p.size; penKind = p.kind || "fountain";
+  activePen = i; tool = p.tool; color = p.color; size = p.size; penKind = (p.kind === "highlighter" || p.tool === "highlighter") ? "highlighter" : "pen";
   selectTool(tool);
   setColor(color);
   $("#sizeRange").value = size; $("#sizeVal").textContent = size;
@@ -532,6 +506,8 @@ function onDown(e) {
     }
     clearSelection(); lassoPts = [pt]; return;
   }
+  if (tool === "cover") { drawing = true; coverStart = pt; return; }
+  if (tool === "laser") { drawing = true; laserCur = { color: "#ff2d55", size: 4, points: [pt] }; return; }
   drawing = true;
   cur = { tool: tool === "highlighter" ? "highlighter" : "pen", color, size, points: [pt] };
   if (tool === "eraser") { drawing = true; cur = { tool: "eraser", points: [pt] }; erasedThisStroke = false; eraseAt(pt); drawEraserCursor(pt); }
@@ -546,6 +522,8 @@ function onMove(e) {
   }
   if (!drawing) return;
   if (tool === "eraser") { cur.points.push(pt); eraseAt(pt); drawEraserCursor(pt); return; }
+  if (tool === "cover") { drawCoverPreview(coverStart, pt); return; }
+  if (tool === "laser") { laserCur.points.push(pt); drawLaserLive(); return; }
   cur.points.push(pt); drawStrokeLive();
 }
 function onUp() {
@@ -557,6 +535,8 @@ function onUp() {
   }
   if (!drawing) return;
   drawing = false;
+  if (tool === "cover") { octx.clearRect(0, 0, PAGE_W, PAGE_H); if (coverStart) finalizeCover(coverStart, lastCoverPt); coverStart = null; return; }
+  if (tool === "laser") { if (laserCur && laserCur.points.length) pushLaserTrail(laserCur.points); laserCur = null; return; }   // 激光笔痕迹自动淡出，不留存
   if (tool === "eraser") { cur = null; octx.clearRect(0, 0, PAGE_W, PAGE_H); if (erasedThisStroke) { save(); renderThumbs(); } erasedThisStroke = false; return; }
   if (cur && cur.points.length) {
     if (tool === "shape") cur = recognizeShape(cur);
@@ -590,24 +570,44 @@ function drawStrokeLive() {
   if (cur) strokePath(ictx, cur);
 }
 let erasedThisStroke = false;
+// 点到线段最近距离（用于精准判断笔画是否被橡皮碰到）
+function distToSeg(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, L = dx * dx + dy * dy;
+  if (!L) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
 function eraseAt(pt) {
-  const r = eraserMode === "pixel" ? eraserSize / 2 : 14;
   const strokes = curPage().strokes;
   if (eraserMode === "pixel") {
+    const r = eraserSize / 2;
     let changed = false; const out = [];
     for (const s of strokes) {
-      const hit = s.points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r + s.size);
-      if (!hit) { out.push(s); continue; }
-      changed = true;
-      // 把不在橡皮范围内的点切成若干段
+      const half = (s.tool === "highlighter" ? s.size * 3 : s.size) / 2;
+      const reach = r + half;
+      // 快速跳过：整条笔画都离橡皮很远
+      const near = s.points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < reach) ||
+        (() => { for (let i = 1; i < s.points.length; i++) if (distToSeg(pt, s.points[i - 1], s.points[i]) < reach) return true; return false; })();
+      if (!near) { out.push(s); continue; }
+      // 先把路径加密（≤4px 一点），这样能把橡皮经过处精确地从中间挖断，两头保留
+      const dense = [];
+      const pts = s.points;
+      if (pts.length === 1) dense.push(pts[0]);
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i], d = Math.hypot(b.x - a.x, b.y - a.y), steps = Math.max(1, Math.ceil(d / 4));
+        if (i === 1) dense.push(a);
+        for (let k = 1; k <= steps; k++) dense.push({ x: a.x + (b.x - a.x) * k / steps, y: a.y + (b.y - a.y) * k / steps, p: b.p ?? 0.5 });
+      }
+      // 按「是否落在橡皮半径内」把加密后的点切成若干保留段
       let seg = [];
-      for (const p of s.points) {
-        if (Math.hypot(p.x - pt.x, p.y - pt.y) < r + s.size / 2) {
-          if (seg.length > 1) out.push({ ...s, points: seg });
+      for (const p of dense) {
+        if (Math.hypot(p.x - pt.x, p.y - pt.y) < r + half) {
+          if (seg.length >= 2) out.push({ ...s, points: seg });
           seg = [];
         } else seg.push(p);
       }
-      if (seg.length > 1) out.push({ ...s, points: seg });
+      if (seg.length >= 2) out.push({ ...s, points: seg });
+      changed = true;
     }
     if (changed) {
       if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; }
@@ -616,9 +616,10 @@ function eraseAt(pt) {
     return;
   }
   // 整笔擦除
+  const r = 14;
   let hit = -1;
   for (let i = strokes.length - 1; i >= 0; i--) if (strokes[i].points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r)) { hit = i; break; }
-  if (hit >= 0) { pushUndo(); strokes.splice(hit, 1); save(); renderInk(); renderThumbs(); }
+  if (hit >= 0) { if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; } strokes.splice(hit, 1); renderInk(); }
 }
 
 function drawEraserCursor(pt) {
@@ -626,6 +627,115 @@ function drawEraserCursor(pt) {
   octx.clearRect(0, 0, PAGE_W, PAGE_H);
   octx.save(); octx.strokeStyle = "#ff3b30"; octx.lineWidth = 1.5 / zoom; octx.setLineDash([4 / zoom, 3 / zoom]);
   octx.beginPath(); octx.arc(pt.x, pt.y, eraserSize / 2, 0, Math.PI * 2); octx.stroke(); octx.restore();
+}
+
+// ═══════════ 挖空笔（遮挡背诵：盖住一块区域，点一下开/合） ═══════════
+let coverStart = null, lastCoverPt = null;
+function drawCoverPreview(a, b) {
+  lastCoverPt = b;
+  octx.clearRect(0, 0, PAGE_W, PAGE_H);
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y), w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
+  octx.save(); octx.fillStyle = "rgba(60,60,67,.55)"; octx.strokeStyle = "#3c3c43"; octx.lineWidth = 1.5 / zoom;
+  octx.fillRect(x, y, w, h); octx.strokeRect(x, y, w, h); octx.restore();
+}
+function finalizeCover(a, b) {
+  if (!b) return;
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y), w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
+  if (w < 12 || h < 12) return;
+  const p = curPage(); p.covers = p.covers || [];
+  uid().then((id) => { p.covers.push({ id, x, y, w, h, color: "#3c3c43", open: false }); save(); renderCovers(); });
+}
+function renderCovers() {
+  const layer = $("#coverLayer"); if (!layer) return;
+  const covers = curPage().covers || [];
+  layer.innerHTML = covers.map((c) => `<div class="cover-box${c.open ? " open" : ""}" data-id="${c.id}" style="left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px;--cc:${c.color || "#3c3c43"}">
+    <button class="cover-del" data-cdel="${c.id}">✕</button></div>`).join("");
+  $$("#coverLayer .cover-box").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.dataset.cdel != null) return;
+      const c = covers.find((x) => x.id === el.dataset.id); if (!c) return;
+      c.open = !c.open; el.classList.toggle("open", c.open); save();
+    });
+    const del = el.querySelector("[data-cdel]");
+    if (del) del.addEventListener("click", (e) => { e.stopPropagation(); curPage().covers = covers.filter((x) => x.id !== del.dataset.cdel); save(); renderCovers(); });
+  });
+}
+
+// ═══════════ 激光笔（临时高亮，短暂停留后自动淡出，不留存） ═══════════
+let laserCur = null, laserTrails = [], laserRAF = 0;
+function drawLaserLive() {
+  octx.clearRect(0, 0, PAGE_W, PAGE_H);
+  drawLaserStroke(laserCur.points, 1);
+}
+function drawLaserStroke(pts, alpha) {
+  if (pts.length < 1) return;
+  octx.save();
+  octx.globalAlpha = alpha; octx.lineJoin = octx.lineCap = "round";
+  octx.strokeStyle = "#ff2d55"; octx.shadowColor = "#ff2d55"; octx.shadowBlur = 14 / zoom; octx.lineWidth = 5 / zoom;
+  octx.beginPath(); octx.moveTo(pts[0].x, pts[0].y);
+  for (const p of pts) octx.lineTo(p.x, p.y);
+  octx.stroke();
+  octx.strokeStyle = "rgba(255,255,255,.9)"; octx.shadowBlur = 0; octx.lineWidth = 2 / zoom;
+  octx.beginPath(); octx.moveTo(pts[0].x, pts[0].y);
+  for (const p of pts) octx.lineTo(p.x, p.y);
+  octx.stroke();
+  octx.restore();
+}
+function pushLaserTrail(pts) {
+  laserTrails.push({ points: pts, born: Date.now() });
+  if (!laserRAF) laserRAF = requestAnimationFrame(laserTick);
+}
+function laserTick() {
+  const now = Date.now(), LIFE = 700;
+  laserTrails = laserTrails.filter((t) => now - t.born < LIFE);
+  if (tool === "laser" && !drawing) octx.clearRect(0, 0, PAGE_W, PAGE_H);
+  for (const t of laserTrails) drawLaserStroke(t.points, Math.max(0, 1 - (now - t.born) / LIFE));
+  if (laserTrails.length) laserRAF = requestAnimationFrame(laserTick);
+  else { laserRAF = 0; if (tool === "laser") octx.clearRect(0, 0, PAGE_W, PAGE_H); }
+}
+
+// ═══════════ 卡片（便签 / 知识卡片） ═══════════
+const CARD_COLORS = ["#fff4c2", "#d8f0ff", "#ffe0e6", "#e2f7d8", "#ececf4"];
+async function addCard() {
+  const p = curPage(); p.cards = p.cards || [];
+  const cx = (-panX / zoom) + (stage.clientWidth / zoom) / 2, cy = (-panY / zoom) + (stage.clientHeight / zoom) / 2;
+  const card = { id: await uid(), x: Math.max(20, cx - 110), y: Math.max(20, cy - 80), w: 220, h: 160,
+    content: "", color: CARD_COLORS[p.cards.length % CARD_COLORS.length] };
+  p.cards.push(card); save(); mountCard(card, true); toast("已添加卡片");
+}
+function renderCards() {
+  const layer = $("#cardLayer"); if (!layer) return;
+  layer.innerHTML = "";
+  for (const c of curPage().cards || []) mountCard(c, false);
+}
+function mountCard(c, edit) {
+  const layer = $("#cardLayer");
+  const el = document.createElement("div");
+  el.className = "card-note"; el.dataset.id = c.id;
+  el.style.cssText = `left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px;background:${c.color}`;
+  el.innerHTML = `<div class="card-bar"><button class="card-del" title="删除">✕</button></div>
+    <div class="card-body" contenteditable="true" spellcheck="false"></div>`;
+  const body = el.querySelector(".card-body"); body.textContent = c.content;
+  const bar = el.querySelector(".card-bar");
+  body.addEventListener("blur", () => { c.content = body.textContent; save(); });
+  el.querySelector(".card-del").addEventListener("click", () => {
+    curPage().cards = (curPage().cards || []).filter((x) => x.id !== c.id); el.remove(); save();
+  });
+  // 拖动（抓标题栏）
+  let dragging = false, start = null, origin = null;
+  bar.addEventListener("pointerdown", (e) => {
+    if (e.target.classList.contains("card-del")) return;
+    dragging = true; start = { x: e.clientX, y: e.clientY }; origin = { x: c.x, y: c.y };
+    bar.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  bar.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    c.x = origin.x + (e.clientX - start.x) / zoom; c.y = origin.y + (e.clientY - start.y) / zoom;
+    el.style.left = c.x + "px"; el.style.top = c.y + "px";
+  });
+  bar.addEventListener("pointerup", () => { if (dragging) { dragging = false; save(); } });
+  layer.appendChild(el);
+  if (edit) setTimeout(() => body.focus(), 0);
 }
 
 // ═══════════ 套索选择 ═══════════
@@ -918,6 +1028,7 @@ function paintTemplate(cx, page) {
   if (img && img.complete && img.naturalWidth) { const sc = PAGE_W / img.naturalWidth; cx.drawImage(img, 0, 0, PAGE_W, img.naturalHeight * sc); }
 }
 function line(cx, x0, y0, x1, y1) { cx.beginPath(); cx.moveTo(x0, y0); cx.lineTo(x1, y1); cx.stroke(); }
+function roundRect(cx, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
 function getBg(page) {
   if (!page.bg) return null;
   if (bgCache.has(page.id)) return bgCache.get(page.id);
@@ -1001,7 +1112,7 @@ function bindTemplateEditor() {
 }
 
 // ═══════════ 渲染 ═══════════
-function renderAll() { applyTransform(); drawPaper(); renderInk(); renderTexts(); renderThumbs(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
+function renderAll() { applyTransform(); drawPaper(); renderInk(); renderTexts(); renderCovers(); renderCards(); renderThumbs(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
 function drawPaper() { pctx.clearRect(0, 0, PAGE_W, PAGE_H); paintTemplate(pctx, curPage()); }
 function renderInk() { ictx.clearRect(0, 0, PAGE_W, PAGE_H); for (const s of curPage().strokes) strokePath(ictx, s); }
 function renderThumbs() {
@@ -1098,6 +1209,12 @@ function flattenPage(i) {
   const cx = c.getContext("2d"); paintTemplate(cx, nb.pages[i]);
   for (const s of nb.pages[i].strokes) strokePath(cx, s);
   for (const t of nb.pages[i].texts || []) { cx.fillStyle = t.color; cx.font = `${t.size}px sans-serif`; cx.textBaseline = "top"; (t.content || "").split("\n").forEach((ln, k) => cx.fillText(ln, t.x + 4, t.y + 2 + k * t.size * 1.3)); }
+  // 卡片（便签）：底色 + 文字
+  for (const cd of nb.pages[i].cards || []) {
+    cx.fillStyle = cd.color || "#fff4c2"; roundRect(cx, cd.x, cd.y, cd.w, cd.h, 10); cx.fill();
+    cx.fillStyle = "#333"; cx.font = "15px sans-serif"; cx.textBaseline = "top";
+    (cd.content || "").split("\n").forEach((ln, k) => cx.fillText(ln, cd.x + 10, cd.y + 24 + k * 21));
+  }
   return c;
 }
 
@@ -1202,6 +1319,83 @@ async function importXopp() {
     nb.pages = pages; nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
     bgCache.clear(); await saveNow(); gotoPage(0); toast(`已导入 .xopp（${pages.length} 页）`);
   } catch (err) { console.error(err); modalAlert({ title: ".xopp 导入失败", desc: err.message }); } finally { busy(false); }
+}
+
+// ═══════════ 内嵌小工具：计算器 / 计时器 ═══════════
+function makeDraggable(panel, handle) {
+  let dragging = false, sx, sy, ox, oy;
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.target.classList.contains("ma-x")) return;
+    dragging = true; const r = panel.getBoundingClientRect();
+    panel.style.left = r.left + "px"; panel.style.top = r.top + "px"; panel.style.transform = "none";
+    sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top; handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e) => { if (!dragging) return; panel.style.left = ox + (e.clientX - sx) + "px"; panel.style.top = oy + (e.clientY - sy) + "px"; });
+  handle.addEventListener("pointerup", () => { dragging = false; });
+}
+let calcExpr = "";
+function calcRender() { $("#calcScreen").textContent = calcExpr || "0"; }
+function calcKey(k) {
+  if (k === "C") { calcExpr = ""; }
+  else if (k === "←") { calcExpr = calcExpr.slice(0, -1); }
+  else if (k === "=") {
+    try {
+      const safe = calcExpr.replace(/[^0-9+\-*/%.() ]/g, "");
+      if (!safe) return;
+      let v = Function(`"use strict";return (${safe.replace(/%/g, "/100")})`)();
+      if (!isFinite(v)) v = "错误";
+      else v = Math.round(v * 1e10) / 1e10;
+      calcExpr = String(v);
+    } catch { calcExpr = "错误"; }
+  } else {
+    if (calcExpr === "错误") calcExpr = "";
+    calcExpr += k;
+  }
+  calcRender();
+}
+let timerMode = "stopwatch", timerRunning = false, timerSec = 0, timerSet = 0, timerInt = 0;
+function timerFmt(s) {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+}
+function timerRender() { $("#timerDisplay").textContent = timerFmt(timerMode === "countdown" ? timerSec : timerSec); }
+function timerTick() {
+  if (timerMode === "countdown") {
+    timerSec -= 1;
+    if (timerSec <= 0) { timerSec = 0; timerStop(); toast("⏰ 倒计时结束"); }
+  } else timerSec += 1;
+  timerRender();
+}
+function timerStart() {
+  if (timerRunning) { timerStop(); return; }
+  if (timerMode === "countdown" && timerSec <= 0) { toast("请先设置倒计时时长"); return; }
+  timerRunning = true; $("#timerStart").textContent = "暂停";
+  timerInt = setInterval(timerTick, 1000);
+}
+function timerStop() { timerRunning = false; clearInterval(timerInt); timerInt = 0; $("#timerStart").textContent = "开始"; }
+function timerReset() { timerStop(); timerSec = timerMode === "countdown" ? timerSet : 0; timerRender(); }
+function bindWidgets() {
+  on("#btnCalc", "click", () => { $("#morePanel").classList.add("hidden"); $("#calcPanel").classList.remove("hidden"); calcRender(); });
+  on("#calcClose", "click", () => $("#calcPanel").classList.add("hidden"));
+  $$("#calcKeys .ck").forEach((b) => b.addEventListener("click", () => calcKey(b.dataset.k)));
+  makeDraggable($("#calcPanel"), $("#calcHead"));
+
+  on("#btnTimer", "click", () => { $("#morePanel").classList.add("hidden"); $("#timerPanel").classList.remove("hidden"); timerRender(); });
+  on("#timerClose", "click", () => $("#timerPanel").classList.add("hidden"));
+  on("#timerStart", "click", timerStart);
+  on("#timerReset", "click", timerReset);
+  $$("#timerModeSeg .seg-btn").forEach((b) => b.addEventListener("click", () => {
+    $$("#timerModeSeg .seg-btn").forEach((x) => x.classList.toggle("on", x === b));
+    timerMode = b.dataset.tm; timerStop(); timerSec = 0; timerSet = 0;
+    $("#timerSet").classList.toggle("hidden", timerMode !== "countdown");
+    timerRender();
+  }));
+  $$("#timerSet .mini-btn").forEach((b) => b.addEventListener("click", () => {
+    timerSet += +b.dataset.add; timerSec = timerSet; timerRender();
+  }));
+  makeDraggable($("#timerPanel"), $("#timerHead"));
 }
 
 // ═══════════ toast ═══════════
@@ -1363,5 +1557,23 @@ const COVER_PALETTE = [
   "#f5a623", "#ffd60a", "#1f9d55", "#16b1c4", "#34c759", "#ff2d55",
   "#8e8e93", "#1c1c1e", "#7d5a3c", "#c77d4a",
 ];
+
+// ═══════════ 自测探针（仅供 CDP 测试用；无副作用） ═══════════
+window.__np_strokes = () => curPage().strokes.map((s) => s.points.length);
+// 擦除探针：把屏幕坐标换算成逻辑坐标，统计线上左/中/右三段是否有笔迹
+window.__np_eraseProbe = (mxScreen, x0Screen, x1Screen, yScreen, rect) => {
+  const toLx = (sx) => (sx - rect.left) / zoom;
+  const midLx = toLx(mxScreen), leftLx = toLx(x0Screen), rightLx = toLx(x1Screen);
+  const gap = 4;   // 中点极近处不应再有笔迹（被橡皮挖断）
+  let leftKept = false, rightKept = false, middleGone = true;
+  const q = Math.min(leftLx, rightLx) + Math.abs(rightLx - leftLx) * 0.25;
+  const q3 = Math.min(leftLx, rightLx) + Math.abs(rightLx - leftLx) * 0.75;
+  for (const s of curPage().strokes) for (const p of s.points) {
+    if (Math.abs(p.x - q) < 40) leftKept = true;
+    if (Math.abs(p.x - q3) < 40) rightKept = true;
+    if (Math.abs(p.x - midLx) < gap) middleGone = false;
+  }
+  return { segments: curPage().strokes.length, leftKept, rightKept, middleGone };
+};
 
 init();
