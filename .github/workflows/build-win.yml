@@ -20,6 +20,58 @@ jobs:
         run: npm install
       - name: 打包 exe
         run: npm run dist:win
+
+      # 打包产物自检：确认 Electron 运行时（尤其 ffmpeg.dll）完整打进产物
+      - name: 打包产物自检（ffmpeg.dll + exe 体积）
+        shell: pwsh
+        run: |
+          Write-Host "===== release/ 目录树 ====="
+          Get-ChildItem -Recurse release | Select-Object FullName, @{N='SizeMB';E={[math]::Round($_.Length/1MB,2)}} | Format-Table -AutoSize | Out-String -Width 4096 | Write-Host
+
+          $fail = $false
+
+          # 1) 校验 win-unpacked 里的 Electron 运行时 dll
+          $unpacked = "release/win-unpacked"
+          if (Test-Path $unpacked) {
+            $ffmpeg = Join-Path $unpacked "ffmpeg.dll"
+            if (Test-Path $ffmpeg) {
+              $sz = [math]::Round((Get-Item $ffmpeg).Length/1MB,2)
+              Write-Host "✅ 找到 ffmpeg.dll ($sz MB) @ $ffmpeg"
+            } else {
+              Write-Host "❌ win-unpacked 中缺少 ffmpeg.dll —— Electron 运行时未完整打包！"
+              $fail = $true
+            }
+            # 其它关键运行时文件
+            foreach ($dll in @("libEGL.dll","libGLESv2.dll","d3dcompiler_47.dll","vk_swiftshader.dll")) {
+              if (Test-Path (Join-Path $unpacked $dll)) { Write-Host "  ✅ $dll" }
+              else { Write-Host "  ⚠️ 缺少 $dll"; }
+            }
+          } else {
+            Write-Host "⚠️ 未找到 release/win-unpacked（portable 可能已清理中间目录），改为仅校验 exe 体积"
+          }
+
+          # 2) 校验 portable exe 体积：完整 Electron 运行时应 > 100MB
+          $exe = Get-ChildItem release -Filter *.exe | Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "❌ release/ 下没有生成 exe"
+            $fail = $true
+          } else {
+            $exeMB = [math]::Round($exe.Length/1MB,2)
+            Write-Host "📦 产物 exe: $($exe.Name) = $exeMB MB"
+            if ($exe.Length -lt 100MB) {
+              Write-Host "❌ exe 仅 $exeMB MB（< 100MB）—— 说明 Electron 运行时（含 ffmpeg.dll）没有完整打进去！"
+              $fail = $true
+            } else {
+              Write-Host "✅ exe 体积正常（含完整 Electron 运行时）"
+            }
+          }
+
+          if ($fail) {
+            Write-Host "::error::打包产物自检失败：Electron 运行时不完整，拒绝发布。"
+            exit 1
+          }
+          Write-Host "🎉 打包产物自检通过。"
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:

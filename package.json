@@ -1,6 +1,6 @@
 {
   "name": "notes-plus-clone",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "手写笔记应用（Notes Plus 风格）：压感手写 / 荧光笔 / 多页笔记本 / 导出 PDF",
   "main": "src/main/index.js",
   "license": "MIT",
@@ -26,7 +26,6 @@
     },
     "files": [
       "src/**/*",
-      "node_modules/**/*",
       "package.json"
     ],
     "win": {
