@@ -113,7 +113,7 @@ function notebookMenu(id, anchor) {
         if (t && t.trim()) { n.title = t.trim(); await window.api.saveNotebooks(state.notebooks); renderShelf(); }
       } },
     { label: "换封面", onClick: async () => {
-        const c = await modalSwatch({ title: "选择封面颜色", colors: COVER_PALETTE, current: n.cover });
+        const c = await modalSwatch({ title: "选择封面颜色", desc: "点色块或用＋自定义任意颜色", colors: COVER_PALETTE, current: n.cover, custom: true });
         if (c) { n.cover = c; await window.api.saveNotebooks(state.notebooks); renderShelf(); }
       } },
     { label: "删除", danger: true, onClick: async () => {
@@ -1162,8 +1162,8 @@ function modalAlert({ title, desc = "" } = {}) {
     document.addEventListener("keydown", _modalCleanup);
   });
 }
-// 色块选择型：resolve(颜色值) 或 resolve(null)
-function modalSwatch({ title, desc = "", colors = [], current = "" } = {}) {
+// 色块选择型：resolve(颜色值) 或 resolve(null)。custom=true 时附一个自定义取色器
+function modalSwatch({ title, desc = "", colors = [], current = "", custom = false } = {}) {
   return new Promise((resolve) => {
     const mask = $("#modalMask");
     $("#modalTitle").textContent = title || "";
@@ -1178,6 +1178,18 @@ function modalSwatch({ title, desc = "", colors = [], current = "" } = {}) {
       b.onclick = () => done(c);
       sw.appendChild(b);
     });
+    if (custom) {
+      const wrap = document.createElement("label");
+      wrap.className = "sw-custom"; wrap.title = "自定义颜色";
+      const inp = document.createElement("input");
+      inp.type = "color"; inp.value = /^#[0-9a-f]{6}$/i.test(current) ? current : "#4c8dff";
+      inp.oninput = () => { wrap.style.setProperty("--picked", inp.value); };
+      inp.onchange = () => done(inp.value);
+      wrap.appendChild(inp);
+      const plus = document.createElement("span"); plus.className = "sw-plus"; plus.textContent = "＋";
+      wrap.appendChild(plus);
+      sw.appendChild(wrap);
+    }
     const ok = $("#modalOk"), cancel = $("#modalCancel");
     ok.classList.add("hidden"); cancel.classList.remove("hidden"); cancel.textContent = "取消";
     mask.classList.remove("hidden");
@@ -1207,6 +1219,10 @@ function showCtxMenu(anchor, items) {
   setTimeout(() => document.addEventListener("click", hideCtxMenu, { once: true }), 0);
 }
 function hideCtxMenu() { $("#ctxMenu").classList.add("hidden"); }
-const COVER_PALETTE = ["#4c8dff", "#e2453b", "#1f9d55", "#f5a623", "#8e44ad", "#16b1c4", "#1c1c1e", "#ff7a59"];
+const COVER_PALETTE = [
+  "#4c8dff", "#0a84ff", "#5856d6", "#8e44ad", "#e2453b", "#ff7a59",
+  "#f5a623", "#ffd60a", "#1f9d55", "#16b1c4", "#34c759", "#ff2d55",
+  "#8e8e93", "#1c1c1e", "#7d5a3c", "#c77d4a",
+];
 
 init();
