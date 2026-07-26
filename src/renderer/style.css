@@ -377,6 +377,39 @@ svg.i16 { width: 16px; height: 16px; }
   border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ═══════════ 交互动画精修（Notes Plus 风） ═══════════ */
+@keyframes pop-in { from { opacity: 0; transform: translateX(-50%) translateY(12px) scale(.96); } to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes card-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes modal-rise { from { opacity: 0; transform: translateY(16px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+.popover:not(.hidden) { animation: pop-in .22s cubic-bezier(.34,1.4,.5,1); }
+#dock { animation: pop-in .3s cubic-bezier(.34,1.4,.5,1); }
+.dropdown.open { animation: card-rise .16s ease; }
+.ctx-menu:not(.hidden) { animation: card-rise .14s ease; transform-origin: top right; }
+.modal-mask:not(.hidden) { animation: fade-in .16s ease; }
+.modal-card { animation: modal-rise .24s cubic-bezier(.34,1.4,.5,1); }
+.tpl-editor:not(.hidden) { animation: fade-in .16s ease; }
+.tpl-editor .te-card { animation: modal-rise .26s cubic-bezier(.34,1.4,.5,1); }
+.sel-bar:not(.hidden) { animation: card-rise .16s ease; }
+/* 书架卡片依次浮现 */
+.shelf-grid > * { animation: card-rise .3s ease backwards; }
+.shelf-grid > *:nth-child(2) { animation-delay: .03s; }
+.shelf-grid > *:nth-child(3) { animation-delay: .06s; }
+.shelf-grid > *:nth-child(4) { animation-delay: .09s; }
+.shelf-grid > *:nth-child(5) { animation-delay: .12s; }
+.shelf-grid > *:nth-child(n+6) { animation-delay: .15s; }
+/* dock 按钮点按回弹 */
+.dk:active { transform: scale(.9); }
+.tool-cell:active { transform: scale(.94); }
+.nb-cover:active { transform: scale(.97); }
+.drawer:not(.hidden) { animation: drawer-in .22s cubic-bezier(.4,0,.2,1); }
+@keyframes drawer-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+/* 页面切换渐显（只淡入画布内容，不动 wrap 的 transform） */
+#canvasWrap.turning #paper, #canvasWrap.turning #ink, #canvasWrap.turning #textLayer { animation: page-fade .26s ease; }
+@keyframes page-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
 /* 我的笔：新增按钮 */
 .pen-add { width: 34px; height: 46px; border: 1.5px dashed var(--line, #E5E5EA); background: none; border-radius: 8px; color: var(--dim, #8E8E93); font-size: 22px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .pen-add:hover { border-color: var(--accent, #007AFF); color: var(--accent, #007AFF); }

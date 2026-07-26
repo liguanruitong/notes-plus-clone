@@ -57,6 +57,7 @@ async function init() {
   bindKeys();
   bindTemplateEditor();
   bindSelBar();
+  buildToolGrid();
   buildPalette();
 
   renderShelf();
@@ -340,6 +341,29 @@ function renderMyPens() {
   const add = $("#myPens .pen-add"); if (add) add.addEventListener("click", addPen);
 }
 function openPenEdit() { const pe = $("#penEdit"); if (pe) pe.classList.remove("hidden"); }
+// 「更多」里的工具九宫格
+const TOOL_DEFS = [
+  { t: "pen",   name: "画笔",   svg: `<path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 6l3 3"/>` },
+  { t: "highlighter", name: "荧光笔", svg: `<path d="M6 18l2 2 3-1 9-9-4-4-9 9z" /><path d="M6 18l3 1"/>` },
+  { t: "eraser", name: "橡皮", svg: `<path d="M8 20l-4-4a2 2 0 0 1 0-2.8l8-8a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8L14 20z"/><path d="M8 20h11"/>` },
+  { t: "lasso", name: "套索", svg: `<path d="M4 11c0-4 4-6 8-6s8 2 8 6-4 6-8 6c-1.5 0-2.8-.3-4-.7" stroke-dasharray="3 2.5"/><path d="M7 16c-1 .8-1 2.2 0 3"/>` },
+  { t: "shape", name: "形状", svg: `<rect x="4" y="4" width="7" height="7" rx="1"/><circle cx="16.5" cy="7.5" r="3.5"/><path d="M4 20l4-6 4 6z"/>` },
+  { t: "text",  name: "文字", svg: `<path d="M5 6h14M12 6v13M9 19h6"/>` },
+  { t: "pan",   name: "平移", svg: `<path d="M12 3v18M3 12h18M8 7l4-4 4 4M8 17l4 4 4-4M7 8l-4 4 4 4M17 8l4 4-4 4"/>` },
+  { t: "insert", name: "图片", svg: `<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-6 6"/>` },
+];
+function buildToolGrid() {
+  const g = $("#toolGrid"); if (!g) return;
+  g.innerHTML = TOOL_DEFS.map((d) => `<button class="tool-cell" data-tool="${d.t}"><svg viewBox="0 0 24 24">${d.svg}</svg><span>${d.name}</span></button>`).join("");
+  $$("#toolGrid .tool-cell").forEach((el) => el.addEventListener("click", () => {
+    const t = el.dataset.tool;
+    if (t === "insert") { $("#morePanel").classList.add("hidden"); importImage(); return; }
+    if (t === "pen" || t === "highlighter") { usePenTool(t); } else selectTool(t);
+    syncToolGrid();
+  }));
+  syncToolGrid();
+}
+function syncToolGrid() { $$("#toolGrid .tool-cell").forEach((el) => el.classList.toggle("active", el.dataset.tool === tool)); }
 let penKind = "fountain";
 function usePen(i) {
   const p = pens[i]; if (!p) return;
@@ -389,8 +413,11 @@ function bindDock() {
   on("#btnUndo", "click", undo);
   on("#btnRedo", "click", redo);
   on("#btnAddPen", "click", addPen);
-  $$("#dock .tool").forEach((b) => b.addEventListener("click", () => selectTool(b.dataset.tool)));
-  on("#btnMore", "click", (e) => { e.stopPropagation(); $("#morePanel").classList.toggle("hidden"); });
+  $$("#dock .tool").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.tool === "insert") { importImage(); return; }
+    selectTool(b.dataset.tool);
+  }));
+  on("#btnMore", "click", (e) => { e.stopPropagation(); $("#morePanel").classList.toggle("hidden"); syncToolGrid(); });
 }
 function bindMorePanel() {
   $("#colorCustom").addEventListener("input", (e) => setColor(e.target.value));
@@ -433,6 +460,7 @@ function selectTool(t) {
   }
   textLayer.style.pointerEvents = t === "text" ? "auto" : "none";
   ink.style.cursor = t === "pan" ? "grab" : t === "text" ? "text" : "crosshair";
+  syncToolGrid();
   persistSettings();
 }
 function persistSettings() { window.api.updateSettings({ lastTool: tool, lastColor: color, lastSize: size }); }
@@ -1007,6 +1035,7 @@ function gotoPage(i) {
   closeText(); clearSelection(); pageIdx = i;
   undoStack.length = 0; redoStack.length = 0;
   buildTemplatePicker(); renderAll();
+  wrap.classList.remove("turning"); void wrap.offsetWidth; wrap.classList.add("turning");
 }
 
 // ═══════════ 页面操作 ═══════════
