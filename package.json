@@ -39,7 +39,7 @@
       ]
     },
     "portable": {
-      "artifactName": "手写笔记-portable-${version}.exe"
+      "artifactName": "NotesPlus-portable-${version}.exe"
     },
     "linux": {
       "target": [
