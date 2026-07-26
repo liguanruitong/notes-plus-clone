@@ -50,7 +50,9 @@ jobs:
             Write-Host "⚠️ 未找到 release/win-unpacked（portable 可能已清理中间目录），改为仅校验 exe 体积"
           }
 
-          # 2) 校验 portable exe 体积：完整 Electron 运行时应 > 100MB
+          # 2) 直接证明 portable exe 内部确实打进了 ffmpeg.dll
+          # portable 是 7z 自解压包，压缩后 ~70MB 属正常（内部解压 ~200MB 的 win-unpacked）；
+          # 因此不用体积猜，而用 7z 列出归档内容直接核对 ffmpeg.dll 是否在包里。
           $exe = Get-ChildItem release -Filter *.exe | Sort-Object Length -Descending | Select-Object -First 1
           if (-not $exe) {
             Write-Host "❌ release/ 下没有生成 exe"
@@ -58,11 +60,20 @@ jobs:
           } else {
             $exeMB = [math]::Round($exe.Length/1MB,2)
             Write-Host "📦 产物 exe: $($exe.Name) = $exeMB MB"
-            if ($exe.Length -lt 100MB) {
-              Write-Host "❌ exe 仅 $exeMB MB（< 100MB）—— 说明 Electron 运行时（含 ffmpeg.dll）没有完整打进去！"
-              $fail = $true
+            $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+            if (Test-Path $sevenZip) {
+              $listing = & $sevenZip l "$($exe.FullName)" 2>$null | Out-String
+              if ($listing -match "ffmpeg\.dll") {
+                Write-Host "✅ 已确认 ffmpeg.dll 打进 portable exe 归档内部"
+              } else {
+                Write-Host "❌ portable exe 归档内部找不到 ffmpeg.dll —— 真机会报找不到 ffmpeg.dll！"
+                $fail = $true
+              }
             } else {
-              Write-Host "✅ exe 体积正常（含完整 Electron 运行时）"
+              # 无 7z 时退回体积下限校验（compressed portable 至少应有数十 MB 的运行时）
+              Write-Host "⚠️ 未找到 7z，退回体积下限校验（>=60MB）"
+              if ($exe.Length -lt 60MB) { Write-Host "❌ exe 仅 $exeMB MB，运行时疑似缺失"; $fail = $true }
+              else { Write-Host "✅ exe 体积合理" }
             }
           }
 
