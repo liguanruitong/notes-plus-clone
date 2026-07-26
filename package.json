@@ -29,6 +29,7 @@
       "package.json"
     ],
     "win": {
+      "artifactName": "NotesPlus-win-x64-${version}.${ext}",
       "target": [
         {
           "target": "portable",
@@ -46,9 +47,6 @@
     },
     "portable": {
       "artifactName": "NotesPlus-portable-${version}.exe"
-    },
-    "zip": {
-      "artifactName": "NotesPlus-win-x64-${version}.zip"
     },
     "linux": {
       "target": [
