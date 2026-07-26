@@ -72,6 +72,13 @@
       <canvas id="overlay"></canvas>
       <div id="textLayer"></div>
     </div>
+    <!-- 套索选区浮动工具条 -->
+    <div id="selBar" class="sel-bar hidden">
+      <button id="selColor" class="sel-b" title="改颜色"><span class="sel-dot"></span>改色</button>
+      <input type="color" id="selColorInput" value="#1c1c1e">
+      <button id="selDup" class="sel-b" title="复制">复制</button>
+      <button id="selDel" class="sel-b danger" title="删除"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>
+    </div>
   </main>
 
   <!-- 底部悬浮胶囊工具条（Note+ 核心视觉） -->

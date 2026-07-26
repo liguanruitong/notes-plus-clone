@@ -56,6 +56,7 @@ async function init() {
   bindDrawing();
   bindKeys();
   bindTemplateEditor();
+  bindSelBar();
   buildPalette();
 
   renderShelf();
@@ -145,6 +146,7 @@ function applyTransform() {
   wrap.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   wrap.style.transformOrigin = "center center";
   $("#zoomVal").textContent = Math.round(zoom * 100) + "%";
+  if (sel) drawSelection();
 }
 function fitToStage() {
   const pad = 60;
@@ -390,6 +392,7 @@ function bindMenus() {
 // ═══════════ 绘制引擎 ═══════════
 let drawing = false, cur = null, panning = false, panStart = null;
 let lassoPts = null, sel = null, selDragLast = null;   // 套索
+let selGesture = null;   // {type:'move'|'scale'|'rotate', ...}
 
 function bindDrawing() {
   ink.addEventListener("pointerdown", onDown);
@@ -410,7 +413,10 @@ function onDown(e) {
   if (tool === "text") return; // 文本层处理
   ink.setPointerCapture(e.pointerId);
   if (tool === "lasso") {
-    if (sel && pointInPoly(pt, sel.poly)) { selDragLast = pt; return; }  // 拖动已选中
+    if (sel) {
+      const g = hitSelHandle(pt);
+      if (g) { selGesture = g; return; }
+    }
     clearSelection(); lassoPts = [pt]; return;
   }
   drawing = true;
@@ -421,7 +427,7 @@ function onMove(e) {
   const pt = toLogical(e);
   if (panning) { panX = e.clientX - panStart.x; panY = e.clientY - panStart.y; applyTransform(); return; }
   if (tool === "lasso") {
-    if (selDragLast) { moveSelection(pt.x - selDragLast.x, pt.y - selDragLast.y); selDragLast = pt; return; }
+    if (selGesture) { updateSelGesture(pt); return; }
     if (lassoPts) { lassoPts.push(pt); drawLasso(); }
     return;
   }
@@ -432,7 +438,7 @@ function onMove(e) {
 function onUp() {
   if (panning) { panning = false; return; }
   if (tool === "lasso") {
-    if (selDragLast) { selDragLast = null; save(); renderInk(); drawSelection(); return; }
+    if (selGesture) { selGesture = null; save(); renderThumbs(); drawSelection(); return; }
     if (lassoPts && lassoPts.length > 2) finalizeLasso();
     lassoPts = null; return;
   }
@@ -532,28 +538,116 @@ function finalizeLasso() {
     const inside = s.points.filter((p) => pointInPoly(p, poly)).length;
     if (inside >= s.points.length * 0.6) idx.push(i);
   });
-  if (!idx.length) { octx.clearRect(0, 0, PAGE_W, PAGE_H); return; }
+  if (!idx.length) { octx.clearRect(0, 0, PAGE_W, PAGE_H); hideSelBar(); return; }
   const strokes = idx.map((i) => curPage().strokes[i]);
-  sel = { strokes, poly };
+  const orig = strokes.map((s) => s.points.map((p) => ({ ...p })));
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const pts of orig) for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const pad = 12;
+  sel = {
+    strokes, orig,
+    box: { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad },
+    ocx: (x0 + x1) / 2, ocy: (y0 + y1) / 2,
+    tx: 0, ty: 0, rot: 0, sc: 1,
+  };
+  applySelTransform();
   drawSelection();
 }
-function moveSelection(dx, dy) {
-  for (const s of sel.strokes) for (const p of s.points) { p.x += dx; p.y += dy; }
-  for (const p of sel.poly) { p.x += dx; p.y += dy; }
-  renderInk(); drawSelection();
+// 变换手柄坐标：center + R(rot)·(局部偏移·sc)
+function selCenter() { return { x: sel.ocx + sel.tx, y: sel.ocy + sel.ty }; }
+function selHandles() {
+  const c = selCenter(), hw = (sel.box.x1 - sel.box.x0) / 2 * sel.sc, hh = (sel.box.y1 - sel.box.y0) / 2 * sel.sc;
+  const cos = Math.cos(sel.rot), sin = Math.sin(sel.rot);
+  const R = (lx, ly) => ({ x: c.x + lx * cos - ly * sin, y: c.y + lx * sin + ly * cos });
+  return {
+    corners: [R(-hw, -hh), R(hw, -hh), R(hw, hh), R(-hw, hh)],
+    rotate: R(0, -hh - 40 / zoom),
+    center: c, hw, hh,
+  };
+}
+function applySelTransform() {
+  const cos = Math.cos(sel.rot), sin = Math.sin(sel.rot);
+  sel.strokes.forEach((s, i) => {
+    s.points = sel.orig[i].map((p) => {
+      let vx = (p.x - sel.ocx) * sel.sc, vy = (p.y - sel.ocy) * sel.sc;
+      const rx = vx * cos - vy * sin, ry = vx * sin + vy * cos;
+      return { ...p, x: sel.ocx + rx + sel.tx, y: sel.ocy + ry + sel.ty };
+    });
+  });
+  renderInk();
 }
 function drawSelection() {
   octx.clearRect(0, 0, PAGE_W, PAGE_H);
-  if (!sel) return;
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const s of sel.strokes) for (const p of s.points) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
-  const pad = 10;
-  octx.save(); octx.strokeStyle = "#2f7be6"; octx.lineWidth = 1.5 / zoom; octx.setLineDash([6 / zoom, 4 / zoom]);
-  octx.strokeRect(x0 - pad, y0 - pad, x1 - x0 + pad * 2, y1 - y0 + pad * 2);
-  octx.fillStyle = "rgba(47,123,230,.06)"; octx.fillRect(x0 - pad, y0 - pad, x1 - x0 + pad * 2, y1 - y0 + pad * 2);
+  if (!sel) { hideSelBar(); return; }
+  const h = selHandles();
+  octx.save();
+  octx.strokeStyle = "#2f7be6"; octx.lineWidth = 1.5 / zoom; octx.setLineDash([6 / zoom, 4 / zoom]);
+  octx.beginPath(); octx.moveTo(h.corners[0].x, h.corners[0].y);
+  for (const c of h.corners.slice(1)) octx.lineTo(c.x, c.y);
+  octx.closePath();
+  octx.fillStyle = "rgba(47,123,230,.06)"; octx.fill(); octx.stroke();
+  octx.setLineDash([]);
+  // 旋转手柄连杆
+  const top = { x: (h.corners[0].x + h.corners[1].x) / 2, y: (h.corners[0].y + h.corners[1].y) / 2 };
+  octx.beginPath(); octx.moveTo(top.x, top.y); octx.lineTo(h.rotate.x, h.rotate.y); octx.stroke();
+  const hr = 6 / zoom;
+  octx.fillStyle = "#fff"; octx.strokeStyle = "#2f7be6"; octx.lineWidth = 2 / zoom;
+  for (const c of h.corners) { octx.beginPath(); octx.rect(c.x - hr, c.y - hr, hr * 2, hr * 2); octx.fill(); octx.stroke(); }
+  octx.beginPath(); octx.arc(h.rotate.x, h.rotate.y, hr, 0, Math.PI * 2); octx.fill(); octx.stroke();
   octx.restore();
-  // 更新选区多边形为包围盒（便于命中拖动）
-  sel.poly = [{ x: x0 - pad, y: y0 - pad }, { x: x1 + pad, y: y0 - pad }, { x: x1 + pad, y: y1 + pad }, { x: x0 - pad, y: y1 + pad }];
+  positionSelBar(h);
+}
+function positionSelBar(h) {
+  const bar = $("#selBar"); if (!bar) return;
+  // 选区中心下方（屏幕坐标）
+  const r = ink.getBoundingClientRect();
+  let maxY = -Infinity; for (const c of h.corners) maxY = Math.max(maxY, c.y);
+  const sx = r.left + h.center.x * zoom, sy = r.top + maxY * zoom + 14;
+  bar.classList.remove("hidden");
+  bar.style.left = sx + "px"; bar.style.top = sy + "px";
+}
+function hideSelBar() { const b = $("#selBar"); if (b) b.classList.add("hidden"); }
+// 命中手柄：返回手势描述，或 move（在框内），或 null
+function hitSelHandle(pt) {
+  const h = selHandles(), tol = 12 / zoom;
+  if (Math.hypot(pt.x - h.rotate.x, pt.y - h.rotate.y) < tol)
+    return { type: "rotate", startAng: Math.atan2(pt.y - h.center.y, pt.x - h.center.x), startRot: sel.rot };
+  for (let i = 0; i < 4; i++) {
+    if (Math.hypot(pt.x - h.corners[i].x, pt.y - h.corners[i].y) < tol) {
+      const c = selCenter(), d0 = Math.hypot(pt.x - c.x, pt.y - c.y);
+      return { type: "scale", startDist: d0 || 1, startSc: sel.sc };
+    }
+  }
+  // 框内 → 移动（用未旋转局部坐标判断）
+  const c = selCenter(), cos = Math.cos(-sel.rot), sin = Math.sin(-sel.rot);
+  const lx = (pt.x - c.x) * cos - (pt.y - c.y) * sin, ly = (pt.x - c.x) * sin + (pt.y - c.y) * cos;
+  if (Math.abs(lx) <= h.hw && Math.abs(ly) <= h.hh) return { type: "move", last: pt };
+  return null;
+}
+function updateSelGesture(pt) {
+  const g = selGesture;
+  if (g.type === "move") { sel.tx += pt.x - g.last.x; sel.ty += pt.y - g.last.y; g.last = pt; }
+  else if (g.type === "rotate") {
+    const c = selCenter(), a = Math.atan2(pt.y - c.y, pt.x - c.x);
+    sel.rot = g.startRot + (a - g.startAng);
+  } else if (g.type === "scale") {
+    const c = selCenter(), d = Math.hypot(pt.x - c.x, pt.y - c.y);
+    sel.sc = Math.max(0.1, g.startSc * (d / g.startDist));
+  }
+  applySelTransform(); drawSelection();
+}
+function recolorSelection(c) {
+  if (!sel) return;
+  pushUndo();
+  for (const s of sel.strokes) s.color = c;
+  save(); renderInk(); renderThumbs();
+}
+function duplicateSelection() {
+  if (!sel) return;
+  pushUndo();
+  const copies = sel.strokes.map((s) => ({ ...s, points: s.points.map((p) => ({ ...p, x: p.x + 24, y: p.y + 24 })) }));
+  curPage().strokes.push(...copies);
+  clearSelection(); save(); renderInk(); renderThumbs(); toast("已复制");
 }
 function deleteSelection() {
   if (!sel) return;
@@ -561,7 +655,14 @@ function deleteSelection() {
   curPage().strokes = curPage().strokes.filter((s) => !sel.strokes.includes(s));
   clearSelection(); save(); renderInk(); renderThumbs();
 }
-function clearSelection() { sel = null; selDragLast = null; lassoPts = null; octx.clearRect(0, 0, PAGE_W, PAGE_H); }
+function clearSelection() { sel = null; selDragLast = null; lassoPts = null; selGesture = null; octx.clearRect(0, 0, PAGE_W, PAGE_H); hideSelBar(); }
+function bindSelBar() {
+  const ci = $("#selColorInput");
+  on("#selColor", "click", () => ci.click());
+  ci.addEventListener("input", (e) => { $("#selColor .sel-dot").style.background = e.target.value; recolorSelection(e.target.value); });
+  on("#selDup", "click", duplicateSelection);
+  on("#selDel", "click", deleteSelection);
+}
 
 // ═══════════ 形状识别 ═══════════
 function recognizeShape(stroke) {

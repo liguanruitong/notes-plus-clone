@@ -142,6 +142,22 @@ svg.i16 { width: 16px; height: 16px; }
 }
 .text-box:focus, .text-box.editing { border-color: var(--accent); background: rgba(0,122,255,.05); }
 
+/* 套索选区浮动工具条 */
+.sel-bar {
+  position: fixed; z-index: 44; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 5px 6px;
+  background: #fff; border-radius: 12px; box-shadow: var(--shadow-pop);
+}
+.sel-bar .sel-b {
+  display: flex; align-items: center; gap: 5px; border: none; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--text); padding: 6px 10px; border-radius: 8px;
+}
+.sel-bar .sel-b:hover { background: rgba(0,0,0,.06); }
+.sel-bar .sel-b.danger { color: var(--danger); }
+.sel-bar .sel-b.danger svg { width: 18px; height: 18px; }
+.sel-bar .sel-dot { width: 14px; height: 14px; border-radius: 50%; background: #1c1c1e; border: 1px solid rgba(0,0,0,.15); }
+#selColorInput { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
 /* ═══════════ 底部悬浮胶囊 Dock ═══════════ */
 #dock {
   position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 40;
