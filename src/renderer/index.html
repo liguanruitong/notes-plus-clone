@@ -7,100 +7,108 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<!-- 顶部工具栏 -->
-<header id="toolbar">
-  <div class="group">
-    <button id="btnMenu" class="tb" title="笔记本 / 页面">☰</button>
-    <span id="nbTitle" class="nb-title" title="点击重命名">我的笔记本</span>
-  </div>
 
-  <div class="group tools">
-    <button class="tb tool" data-tool="pen" title="钢笔（压感）">✒️</button>
-    <button class="tb tool" data-tool="highlighter" title="荧光笔">🖍️</button>
-    <button class="tb tool" data-tool="eraser" title="橡皮擦（按笔画）">🩹</button>
-    <button class="tb tool" data-tool="pan" title="拖动画布">✋</button>
-  </div>
+<!-- ═══════════ 书架（Library） ═══════════ -->
+<section id="shelf" class="screen">
+  <header class="shelf-bar">
+    <span class="shelf-title">我的笔记</span>
+    <button id="btnNewNotebook" class="pill-btn">＋ 新建笔记本</button>
+  </header>
+  <div id="shelfGrid" class="shelf-grid"></div>
+</section>
 
-  <!-- 自定义笔盘 -->
-  <div class="group pentray" id="penTray">
-    <div id="pens" class="pens"></div>
-    <button id="btnAddPen" class="tb small" title="把当前颜色/粗细存为新笔">＋</button>
-    <button id="btnEditPen" class="tb small" title="更新当前选中的笔">✎</button>
-    <button id="btnDelPen" class="tb small" title="删除当前选中的笔">🗑</button>
-  </div>
-
-  <div class="group">
-    <div id="palette" class="palette"></div>
-    <input type="color" id="colorCustom" class="color-custom" title="自定义颜色" value="#1a1a1a">
-  </div>
-
-  <div class="group">
-    <label class="size-wrap" title="笔宽">
-      <input type="range" id="sizeRange" min="1" max="24" value="3">
-      <span id="sizeVal">3</span>
-    </label>
-  </div>
-
-  <div class="group">
-    <button id="btnUndo" class="tb" title="撤销 (Ctrl+Z)">↶</button>
-    <button id="btnRedo" class="tb" title="重做 (Ctrl+Y)">↷</button>
-  </div>
-
-  <div class="group">
-    <select id="paperSel" title="纸张模板">
-      <option value="blank">空白</option>
-      <option value="lined">横线</option>
-      <option value="grid">网格</option>
-    </select>
-  </div>
-
-  <div class="group grow"></div>
-
-  <div class="group">
-    <button id="btnZoomOut" class="tb" title="缩小">－</button>
-    <span id="zoomVal" class="zoom">100%</span>
-    <button id="btnZoomIn" class="tb" title="放大">＋</button>
-    <button id="btnZoomFit" class="tb" title="适应">⤢</button>
-  </div>
-
-  <!-- 导入 / 导出 下拉 -->
-  <div class="group menu-wrap">
-    <button id="btnImport" class="tb text">导入 ▾</button>
-    <div id="importMenu" class="dropdown">
-      <button data-imp="image">图片…</button>
-      <button data-imp="pdf">PDF…</button>
-      <button data-imp="xopp">Xournal++ (.xopp)…</button>
+<!-- ═══════════ 编辑器（Editor） ═══════════ -->
+<section id="editor" class="screen hidden">
+  <!-- 顶栏：极简 iOS 风 -->
+  <header id="topbar">
+    <div class="tb-left">
+      <button id="btnBack" class="ic" title="返回书架">‹</button>
+      <button id="btnPages" class="ic" title="页面">▤</button>
+      <button id="btnBookmarks" class="ic" title="书签">🔖</button>
     </div>
-  </div>
-  <div class="group menu-wrap">
-    <button id="btnExport" class="tb text">导出 ▾</button>
+    <div class="tb-title" id="nbTitle" title="点击重命名">笔记本</div>
+    <div class="tb-right">
+      <button id="btnBookmarkPage" class="ic" title="给本页加/去书签">☆</button>
+      <button id="btnImport" class="ic" title="导入">⤓</button>
+      <button id="btnExport" class="ic" title="导出">⤒</button>
+      <button id="btnZoomFit" class="ic" title="适应屏幕">⤢</button>
+      <span id="zoomVal" class="zoom">100%</span>
+    </div>
+    <!-- 导入/导出下拉 -->
+    <div id="importMenu" class="dropdown">
+      <button data-imp="image">导入图片…</button>
+      <button data-imp="pdf">导入 PDF…</button>
+      <button data-imp="xopp">导入 Xournal++ (.xopp)…</button>
+    </div>
     <div id="exportMenu" class="dropdown">
       <button data-exp="png">当前页 PNG…</button>
       <button data-exp="jpg">当前页 JPG…</button>
       <button data-exp="pdf">整本 PDF…</button>
       <button data-exp="xopp">整本 Xournal++ (.xopp)…</button>
     </div>
-  </div>
-</header>
+  </header>
 
-<div id="body">
-  <!-- 页面侧栏 -->
-  <aside id="sidebar" class="hidden">
-    <div class="side-head">
-      <span>页面</span>
-      <button id="btnAddPage" class="tb small" title="新增页面">＋</button>
+  <!-- 左侧抽屉：页面缩略图 -->
+  <aside id="sidebar" class="drawer hidden">
+    <div class="drawer-head">
+      <span id="drawerTitle">页面</span>
+      <button id="btnAddPage" class="ic small" title="新增页面">＋</button>
     </div>
     <div id="pageList" class="page-list"></div>
+    <div id="bookmarkList" class="bookmark-list hidden"></div>
   </aside>
 
-  <!-- 画布区 -->
+  <!-- 画布 -->
   <main id="stage">
     <div id="canvasWrap">
       <canvas id="paper"></canvas>
       <canvas id="ink"></canvas>
+      <canvas id="overlay"></canvas>
+      <div id="textLayer"></div>
     </div>
   </main>
-</div>
+
+  <!-- 底部悬浮胶囊工具条（Note+ 核心视觉） -->
+  <div id="dock">
+    <button class="dk undo" id="btnUndo" title="撤销">↩</button>
+    <button class="dk redo" id="btnRedo" title="重做">↪</button>
+    <span class="dk-sep"></span>
+    <div id="penRack" class="pen-rack"></div>
+    <button class="dk addpen" id="btnAddPen" title="存入当前笔">＋</button>
+    <span class="dk-sep"></span>
+    <button class="dk tool" data-tool="eraser" id="tEraser" title="橡皮擦">▱</button>
+    <button class="dk tool" data-tool="lasso" id="tLasso" title="套索选择">◌</button>
+    <button class="dk tool" data-tool="text" id="tText" title="文本框">T</button>
+    <button class="dk tool" data-tool="shape" id="tShape" title="形状识别">△</button>
+    <button class="dk tool" data-tool="pan" id="tPan" title="移动画布">✋</button>
+    <button class="dk more" id="btnMore" title="更多">•••</button>
+  </div>
+
+  <!-- 「更多」弹层：笔设置 / 纸张模板 -->
+  <div id="morePanel" class="popover hidden">
+    <div class="pop-sec">
+      <div class="pop-label">当前笔</div>
+      <div class="pop-row">
+        <input type="color" id="colorCustom" value="#1a1a1a">
+        <div id="palette" class="palette"></div>
+      </div>
+      <div class="pop-row">
+        <span class="mini">粗细</span>
+        <input type="range" id="sizeRange" min="1" max="24" value="3">
+        <span id="sizeVal">3</span>
+      </div>
+      <div class="pop-row">
+        <button id="btnEditPen" class="mini-btn">更新此笔</button>
+        <button id="btnDelPen" class="mini-btn">删除此笔</button>
+      </div>
+    </div>
+    <div class="pop-sec">
+      <div class="pop-label">纸张模板</div>
+      <div id="tplGrid" class="tpl-grid"></div>
+      <button id="btnNewTpl" class="mini-btn wide">＋ 自创模板…</button>
+    </div>
+  </div>
+</section>
 
 <div id="toast" class="toast"></div>
 <div id="busy" class="busy hidden"><div class="spinner"></div><span id="busyText">处理中…</span></div>

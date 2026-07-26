@@ -24,6 +24,10 @@ function createWindow() {
     },
   });
   win.setMenuBarVisibility(false);
+  if (process.env.NP_DEBUG) {
+    win.webContents.on("console-message", (_e, lvl, msg) => console.log(`[renderer:${lvl}] ${msg}`));
+    win.webContents.on("render-process-gone", (_e, d) => console.log("[render-gone]", JSON.stringify(d)));
+  }
   win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 }
 
@@ -34,13 +38,13 @@ function ensureNotebook() {
     const nb = {
       id: uid(),
       title: "我的笔记本",
-      pages: [{ id: uid(), paper: "lined", strokes: [] }],
+      cover: "#4c8dff",
+      createdAt: Date.now(),
+      pages: [{ id: uid(), template: "lined", bg: null, bookmark: null, strokes: [], texts: [] }],
     };
     notebooks = [nb];
     store.set("notebooks", notebooks);
-    store.set("activeNotebook", nb.id);
   }
-  if (!store.get("activeNotebook")) store.set("activeNotebook", notebooks[0].id);
   return notebooks;
 }
 

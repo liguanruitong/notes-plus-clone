@@ -25,15 +25,11 @@
     "files": ["src/**/*", "node_modules/**/*", "package.json"],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
         { "target": "portable", "arch": ["x64"] }
       ]
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "shortcutName": "手写笔记"
+    "portable": {
+      "artifactName": "手写笔记-portable-${version}.exe"
     },
     "linux": { "target": ["AppImage"], "category": "Office" }
   }

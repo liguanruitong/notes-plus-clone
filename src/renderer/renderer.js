@@ -1,116 +1,165 @@
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
-// 逻辑页面尺寸（A4 比例，单位 px 逻辑坐标）
+// A4 逻辑页面尺寸（210×297mm @ ~150dpi），所有纸张默认 A4
 const PAGE_W = 1240, PAGE_H = 1754;
 
-// pdf.js worker（本地 vendor，离线可用）
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
 
 let state = { notebooks: [], activeNotebook: null, settings: {} };
-let nb = null;         // 当前 notebook
-let pageIdx = 0;       // 当前页索引
+let nb = null;          // 当前打开的 notebook
+let pageIdx = 0;
 let tool = "pen", color = "#1a1a1a", size = 3;
 let zoom = 1, panX = 0, panY = 0;
 let pens = [], activePen = 0;
-const bgCache = new Map();   // pageId -> HTMLImageElement（页背景）
+let customTemplates = [];
+const bgCache = new Map();
 
-// 每页独立的 undo/redo 栈（存 strokes 快照的浅拷贝）
 const undoStack = [], redoStack = [];
 
-const paper = $("#paper"), ink = $("#ink");
-const pctx = paper.getContext("2d"), ictx = ink.getContext("2d");
-const wrap = $("#canvasWrap"), stage = $("#stage");
+const paper = $("#paper"), ink = $("#ink"), overlay = $("#overlay");
+const pctx = paper.getContext("2d"), ictx = ink.getContext("2d"), octx = overlay.getContext("2d");
+const wrap = $("#canvasWrap"), stage = $("#stage"), textLayer = $("#textLayer");
 
-// ---- 初始化 ----
+const uid = () => window.api.newId();
+
+// ═══════════ 初始化 ═══════════
 async function init() {
   state = await window.api.getState();
-  nb = state.notebooks.find((n) => n.id === state.activeNotebook) || state.notebooks[0];
-  tool = state.settings.lastTool || "pen";
-  color = state.settings.lastColor || "#1a1a1a";
-  size = state.settings.lastSize || 3;
-  pens = state.settings.pens || [];
-  activePen = state.settings.activePen || 0;
+  const s = state.settings;
+  tool = s.lastTool || "pen"; color = s.lastColor || "#1a1a1a"; size = s.lastSize || 3;
+  pens = s.pens || []; activePen = s.activePen || 0; customTemplates = s.customTemplates || [];
 
-  setupCanvas();
-  buildPalette();
-  buildPens();
-  bindToolbar();
+  for (const c of [paper, ink, overlay]) { c.width = PAGE_W; c.height = PAGE_H; }
+  bindShelf();
+  bindTopbar();
+  bindDock();
+  bindMorePanel();
   bindMenus();
   bindDrawing();
   bindKeys();
-  selectTool(tool);
-  $("#colorCustom").value = color;
-  $("#sizeRange").value = size; $("#sizeVal").textContent = size;
-  $("#paperSel").value = curPage().paper;
-  $("#nbTitle").textContent = nb.title;
+  buildPalette();
 
-  fitToStage();
-  renderAll();
+  renderShelf();
+  showShelf();
 }
-
 function curPage() { return nb.pages[pageIdx]; }
 
-// ---- 画布尺寸 & 缩放 ----
-function setupCanvas() {
-  for (const c of [paper, ink]) { c.width = PAGE_W; c.height = PAGE_H; }
+// ═══════════ 屏幕切换 ═══════════
+function showShelf() { $("#shelf").classList.remove("hidden"); $("#editor").classList.add("hidden"); renderShelf(); }
+function showEditor() { $("#shelf").classList.add("hidden"); $("#editor").classList.remove("hidden"); }
+
+// ═══════════ 书架 ═══════════
+function bindShelf() {
+  $("#btnNewNotebook").addEventListener("click", newNotebook);
 }
+function renderShelf() {
+  const grid = $("#shelfGrid");
+  grid.innerHTML = state.notebooks.map((n) => `
+    <div class="nb-card" data-id="${n.id}">
+      <div class="nb-cover" style="background:${n.cover || "#4c8dff"}">
+        <span class="spine"></span>
+        <span class="glyph">✎</span>
+        <span class="cnt">${n.pages.length} 页</span>
+      </div>
+      <div class="nb-meta">
+        <span class="nb-name">${escapeHtml(n.title)}</span>
+        <button class="nb-menu" data-menu="${n.id}">⋯</button>
+      </div>
+    </div>`).join("");
+  $$("#shelfGrid .nb-card").forEach((el) => {
+    el.addEventListener("click", (e) => { if (e.target.dataset.menu != null) return; openNotebook(el.dataset.id); });
+  });
+  $$("#shelfGrid .nb-menu").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); notebookMenu(el.dataset.menu); }));
+}
+async function newNotebook() {
+  const title = prompt("笔记本名称：", "新笔记本");
+  if (title === null) return;
+  const palette = ["#4c8dff", "#e2453b", "#1f9d55", "#f5a623", "#8e44ad", "#16b1c4"];
+  const cover = palette[state.notebooks.length % palette.length];
+  const n = { id: await uid(), title: title.trim() || "新笔记本", cover, createdAt: Date.now(),
+    pages: [{ id: await uid(), template: "lined", bg: null, bookmark: null, strokes: [], texts: [] }] };
+  state.notebooks.push(n);
+  await window.api.saveNotebooks(state.notebooks);
+  renderShelf();
+  openNotebook(n.id);
+}
+function notebookMenu(id) {
+  const n = state.notebooks.find((x) => x.id === id);
+  const act = prompt(`「${n.title}」\n输入操作：\n  r = 重命名\n  d = 删除\n  c = 换封面颜色`, "r");
+  if (act === "r") { const t = prompt("新名称：", n.title); if (t && t.trim()) n.title = t.trim(); }
+  else if (act === "d") { if (!confirm(`删除笔记本「${n.title}」？不可恢复。`)) return; state.notebooks = state.notebooks.filter((x) => x.id !== id); }
+  else if (act === "c") { const c = prompt("封面颜色（如 #e2453b）：", n.cover); if (c) n.cover = c.trim(); }
+  else return;
+  window.api.saveNotebooks(state.notebooks); renderShelf();
+}
+async function openNotebook(id) {
+  nb = state.notebooks.find((x) => x.id === id);
+  if (!nb) return;
+  await window.api.setActive(id);
+  pageIdx = 0; bgCache.clear();
+  undoStack.length = 0; redoStack.length = 0;
+  $("#nbTitle").textContent = nb.title;
+  buildPens(); buildTemplatePicker();
+  selectTool(tool);
+  $("#colorCustom").value = color; $("#sizeRange").value = size; $("#sizeVal").textContent = size;
+  showEditor();
+  fitToStage();
+  renderAll();
+  renderTexts();
+}
+
+// ═══════════ 缩放 / 变换 ═══════════
 function applyTransform() {
-  wrap.style.width = PAGE_W + "px";
-  wrap.style.height = PAGE_H + "px";
+  wrap.style.width = PAGE_W + "px"; wrap.style.height = PAGE_H + "px";
   wrap.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   wrap.style.transformOrigin = "center center";
   $("#zoomVal").textContent = Math.round(zoom * 100) + "%";
 }
 function fitToStage() {
-  const pad = 40;
-  const sw = stage.clientWidth - pad, sh = stage.clientHeight - pad;
-  zoom = Math.min(sw / PAGE_W, sh / PAGE_H);
-  panX = 0; panY = 0;
-  applyTransform();
+  const pad = 60;
+  zoom = Math.min((stage.clientWidth - pad) / PAGE_W, (stage.clientHeight - pad) / PAGE_H);
+  panX = 0; panY = 0; applyTransform();
 }
-
-// 屏幕坐标 -> 页面逻辑坐标
+function setZoom(z) { zoom = Math.max(0.15, Math.min(6, z)); applyTransform(); }
 function toLogical(e) {
   const r = ink.getBoundingClientRect();
-  return {
-    x: (e.clientX - r.left) / zoom,
-    y: (e.clientY - r.top) / zoom,
-    p: e.pressure && e.pressure > 0 ? e.pressure : 0.5,
-  };
+  return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom,
+    p: e.pressure && e.pressure > 0 ? e.pressure : 0.5 };
 }
 
-// ---- 调色板 ----
+// ═══════════ 调色板 & 笔盘 ═══════════
 function buildPalette() {
-  const colors = ["#1a1a1a", "#e23b3b", "#2f7be6", "#1f9d55", "#f5a623", "#8e44ad"];
-  $("#palette").innerHTML = colors
-    .map((c) => `<span class="sw ${c === color ? "on" : ""}" style="background:${c}" data-c="${c}"></span>`)
-    .join("");
+  const colors = ["#1a1a1a", "#e2453b", "#2f7be6", "#1f9d55", "#f5a623", "#8e44ad", "#d63384", "#00897b"];
+  $("#palette").innerHTML = colors.map((c) => `<span class="sw ${c === color ? "on" : ""}" style="background:${c}" data-c="${c}"></span>`).join("");
   $$("#palette .sw").forEach((el) => el.addEventListener("click", () => setColor(el.dataset.c)));
 }
 function setColor(c) {
   color = c;
   $$("#palette .sw").forEach((el) => el.classList.toggle("on", el.dataset.c === c));
-  $("#colorCustom").value = c;
-  persistSettings();
+  $("#colorCustom").value = c; persistSettings();
 }
-
-// ---- 自定义笔盘 ----
+function darken(hex, f = 0.7) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
+  return `rgb(${r},${g},${b})`;
+}
 function buildPens() {
-  $("#pens").innerHTML = pens.map((p, i) => {
-    const w = Math.max(2, Math.min(14, p.size));
+  $("#penRack").innerHTML = pens.map((p, i) => {
     const hl = p.tool === "highlighter" ? "hl" : "";
-    return `<button class="pen ${i === activePen ? "on" : ""} ${hl}" data-i="${i}" title="${p.tool === "highlighter" ? "荧光笔" : "钢笔"} · ${p.size}px">
-      <span class="nib" style="background:${p.color}; height:${w}px"></span>
+    const tip = p.tool === "highlighter" ? p.color : darken(p.color, .6);
+    return `<button class="pen ${i === activePen && tool !== "eraser" && tool !== "lasso" && tool !== "text" && tool !== "shape" && tool !== "pan" ? "on" : ""} ${hl}" data-i="${i}" title="${p.tool === "highlighter" ? "荧光笔" : "钢笔"} · ${p.size}px">
+      <span class="tip" style="border-bottom:6px solid ${tip}"></span>
+      <span class="nibdot" style="background:${darken(p.color,.4)}"></span>
+      <span class="body" style="background:${p.color}"></span>
     </button>`;
   }).join("");
-  $$("#pens .pen").forEach((el) => el.addEventListener("click", () => usePen(+el.dataset.i)));
+  $$("#penRack .pen").forEach((el) => el.addEventListener("click", () => usePen(+el.dataset.i)));
 }
 function usePen(i) {
-  const p = pens[i];
-  if (!p) return;
-  activePen = i;
-  tool = p.tool; color = p.color; size = p.size;
+  const p = pens[i]; if (!p) return;
+  activePen = i; tool = p.tool; color = p.color; size = p.size;
   selectTool(tool);
   setColor(color);
   $("#sizeRange").value = size; $("#sizeVal").textContent = size;
@@ -119,493 +168,602 @@ function usePen(i) {
 }
 function addPen() {
   pens.push({ tool: tool === "highlighter" ? "highlighter" : "pen", color, size });
-  activePen = pens.length - 1;
-  buildPens();
-  window.api.updateSettings({ pens, activePen });
-  toast("已存入笔盘");
+  activePen = pens.length - 1; buildPens();
+  window.api.updateSettings({ pens, activePen }); toast("已存入笔盘");
 }
 function editPen() {
   if (!pens[activePen]) return;
   pens[activePen] = { tool: tool === "highlighter" ? "highlighter" : "pen", color, size };
-  buildPens();
-  window.api.updateSettings({ pens });
-  toast("已更新此笔");
+  buildPens(); window.api.updateSettings({ pens }); toast("已更新此笔");
 }
 function delPen() {
-  if (pens.length <= 1 || !pens[activePen]) return;
-  pens.splice(activePen, 1);
-  activePen = Math.max(0, activePen - 1);
-  buildPens();
-  window.api.updateSettings({ pens, activePen });
+  if (pens.length <= 1) return;
+  pens.splice(activePen, 1); activePen = Math.max(0, activePen - 1);
+  buildPens(); window.api.updateSettings({ pens, activePen });
 }
 
-// ---- 工具栏 ----
-function bindToolbar() {
-  $$(".tool").forEach((b) => b.addEventListener("click", () => selectTool(b.dataset.tool)));
-  $("#colorCustom").addEventListener("input", (e) => setColor(e.target.value));
-  $("#sizeRange").addEventListener("input", (e) => {
-    size = +e.target.value; $("#sizeVal").textContent = size; persistSettings();
-  });
+// ═══════════ 顶栏 / Dock / 弹层 ═══════════
+function bindTopbar() {
+  $("#btnBack").addEventListener("click", () => { closeText(); showShelf(); });
+  $("#btnPages").addEventListener("click", () => toggleDrawer("pages"));
+  $("#btnBookmarks").addEventListener("click", () => toggleDrawer("bookmarks"));
+  $("#btnBookmarkPage").addEventListener("click", toggleBookmark);
+  $("#btnAddPage").addEventListener("click", () => addPage());
+  $("#btnZoomFit").addEventListener("click", fitToStage);
+  $("#nbTitle").addEventListener("click", renameCurrent);
+}
+function bindDock() {
   $("#btnUndo").addEventListener("click", undo);
   $("#btnRedo").addEventListener("click", redo);
-  $("#paperSel").addEventListener("change", (e) => {
-    curPage().paper = e.target.value; save(); drawPaper(); renderThumbs();
-  });
-  $("#btnZoomIn").addEventListener("click", () => setZoom(zoom * 1.2));
-  $("#btnZoomOut").addEventListener("click", () => setZoom(zoom / 1.2));
-  $("#btnZoomFit").addEventListener("click", fitToStage);
-  $("#btnMenu").addEventListener("click", () => {
-    $("#sidebar").classList.toggle("hidden"); renderThumbs();
-  });
-  $("#btnAddPage").addEventListener("click", addPage);
   $("#btnAddPen").addEventListener("click", addPen);
+  $$("#dock .tool").forEach((b) => b.addEventListener("click", () => selectTool(b.dataset.tool)));
+  $("#btnMore").addEventListener("click", (e) => { e.stopPropagation(); $("#morePanel").classList.toggle("hidden"); });
+}
+function bindMorePanel() {
+  $("#colorCustom").addEventListener("input", (e) => setColor(e.target.value));
+  $("#sizeRange").addEventListener("input", (e) => { size = +e.target.value; $("#sizeVal").textContent = size; persistSettings(); });
   $("#btnEditPen").addEventListener("click", editPen);
   $("#btnDelPen").addEventListener("click", delPen);
-  $("#nbTitle").addEventListener("click", renameNotebook);
-  window.addEventListener("resize", applyTransform);
+  $("#btnNewTpl").addEventListener("click", newTemplate);
+  document.addEventListener("click", (e) => {
+    if (!$("#morePanel").contains(e.target) && e.target.id !== "btnMore") $("#morePanel").classList.add("hidden");
+  });
 }
 function selectTool(t) {
   tool = t;
-  $$(".tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
-  ink.style.cursor = t === "pan" ? "grab" : "crosshair";
+  clearSelection();
+  $$("#dock .tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
+  const drawingTool = !["eraser", "lasso", "text", "shape", "pan"].includes(t);
+  buildPens();
+  textLayer.style.pointerEvents = t === "text" ? "auto" : "none";
+  ink.style.cursor = t === "pan" ? "grab" : t === "text" ? "text" : "crosshair";
   persistSettings();
 }
-function setZoom(z) { zoom = Math.max(0.15, Math.min(6, z)); applyTransform(); }
-function persistSettings() {
-  window.api.updateSettings({ lastTool: tool, lastColor: color, lastSize: size });
+function persistSettings() { window.api.updateSettings({ lastTool: tool, lastColor: color, lastSize: size }); }
+
+// ═══════════ 抽屉：页面 & 书签 ═══════════
+let drawerMode = null;
+function toggleDrawer(mode) {
+  const sb = $("#sidebar");
+  if (!sb.classList.contains("hidden") && drawerMode === mode) { sb.classList.add("hidden"); return; }
+  sb.classList.remove("hidden"); drawerMode = mode;
+  $("#drawerTitle").textContent = mode === "pages" ? "页面" : "书签";
+  $("#btnAddPage").classList.toggle("hidden", mode !== "pages");
+  $("#pageList").classList.toggle("hidden", mode !== "pages");
+  $("#bookmarkList").classList.toggle("hidden", mode !== "bookmarks");
+  if (mode === "pages") renderThumbs(); else renderBookmarks();
+}
+function toggleBookmark() {
+  const p = curPage();
+  if (p.bookmark) { p.bookmark = null; toast("已移除书签"); }
+  else { const t = prompt("书签名称：", `第 ${pageIdx + 1} 页`); if (t === null) return; p.bookmark = t.trim() || `第 ${pageIdx + 1} 页`; toast("已加书签"); }
+  $("#btnBookmarkPage").textContent = p.bookmark ? "★" : "☆";
+  save(); if (drawerMode === "bookmarks") renderBookmarks(); renderThumbs();
+}
+function renderBookmarks() {
+  const list = $("#bookmarkList");
+  const marks = nb.pages.map((p, i) => ({ p, i })).filter((x) => x.p.bookmark);
+  if (!marks.length) { list.innerHTML = `<div class="bm-empty">还没有书签<br>用顶栏 ☆ 给页面加书签</div>`; return; }
+  list.innerHTML = marks.map((m) => `<div class="bm-item" data-i="${m.i}">🔖 <span>${escapeHtml(m.p.bookmark)}</span></div>`).join("");
+  $$("#bookmarkList .bm-item").forEach((el) => el.addEventListener("click", () => gotoPage(+el.dataset.i)));
 }
 
-// ---- 导入 / 导出 下拉菜单 ----
+// ═══════════ 导入 / 导出菜单 ═══════════
 function bindMenus() {
-  const toggle = (id) => {
-    const m = $(id);
-    const open = m.classList.contains("open");
-    $$(".dropdown").forEach((d) => d.classList.remove("open"));
-    if (!open) m.classList.add("open");
-  };
+  const toggle = (id) => { const m = $(id); const open = m.classList.contains("open"); $$(".dropdown").forEach((d) => d.classList.remove("open")); if (!open) m.classList.add("open"); };
   $("#btnImport").addEventListener("click", (e) => { e.stopPropagation(); toggle("#importMenu"); });
   $("#btnExport").addEventListener("click", (e) => { e.stopPropagation(); toggle("#exportMenu"); });
-  document.addEventListener("click", () => $$(".dropdown").forEach((d) => d.classList.remove("open")));
-
-  $$("#importMenu button").forEach((b) => b.addEventListener("click", () => {
-    const k = b.dataset.imp;
-    if (k === "image") importImage();
-    if (k === "pdf") importPdf();
-    if (k === "xopp") importXopp();
-  }));
-  $$("#exportMenu button").forEach((b) => b.addEventListener("click", () => {
-    const k = b.dataset.exp;
-    if (k === "png") exportRaster("png");
-    if (k === "jpg") exportRaster("jpg");
-    if (k === "pdf") exportPdf();
-    if (k === "xopp") exportXopp();
-  }));
+  document.addEventListener("click", (e) => { if (!e.target.closest(".dropdown") && e.target.id !== "btnImport" && e.target.id !== "btnExport") $$(".dropdown").forEach((d) => d.classList.remove("open")); });
+  $$("#importMenu button").forEach((b) => b.addEventListener("click", () => ({ image: importImage, pdf: importPdf, xopp: importXopp }[b.dataset.imp]())));
+  $$("#exportMenu button").forEach((b) => b.addEventListener("click", () => ({ png: () => exportRaster("png"), jpg: () => exportRaster("jpg"), pdf: exportPdf, xopp: exportXopp }[b.dataset.exp]())));
 }
 
-// ---- 绘制引擎 ----
+// ═══════════ 绘制引擎 ═══════════
 let drawing = false, cur = null, panning = false, panStart = null;
+let lassoPts = null, sel = null, selDragLast = null;   // 套索
 
 function bindDrawing() {
-  ink.addEventListener("pointerdown", (e) => {
-    if (tool === "pan") { panning = true; panStart = { x: e.clientX - panX, y: e.clientY - panY }; ink.setPointerCapture(e.pointerId); return; }
-    drawing = true;
-    ink.setPointerCapture(e.pointerId);
-    const pt = toLogical(e);
-    cur = { tool, color, size, points: [pt] };
-    if (tool === "eraser") eraseAt(pt);
-  });
-  ink.addEventListener("pointermove", (e) => {
-    if (panning) { panX = e.clientX - panStart.x; panY = e.clientY - panStart.y; applyTransform(); return; }
-    if (!drawing) return;
-    const pt = toLogical(e);
-    if (tool === "eraser") { cur.points.push(pt); eraseAt(pt); return; }
-    cur.points.push(pt);
-    drawStrokeLive(cur);
-  });
-  const end = () => {
-    if (panning) { panning = false; return; }
-    if (!drawing) return;
-    drawing = false;
-    if (tool === "eraser") { cur = null; return; }
-    if (cur && cur.points.length) {
-      pushUndo();
-      curPage().strokes.push(cur);
-      save(); renderInk(); renderThumbs();
-    }
-    cur = null;
-  };
-  ink.addEventListener("pointerup", end);
-  ink.addEventListener("pointercancel", end);
-  ink.addEventListener("pointerleave", () => { if (drawing && tool !== "eraser") end(); });
-
-  // 滚轮缩放（Ctrl）/ 平移
+  ink.addEventListener("pointerdown", onDown);
+  ink.addEventListener("pointermove", onMove);
+  ink.addEventListener("pointerup", onUp);
+  ink.addEventListener("pointercancel", onUp);
+  ink.addEventListener("pointerleave", () => { if (drawing && tool !== "eraser") onUp(); });
   stage.addEventListener("wheel", (e) => {
     if (e.ctrlKey) { e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.1 : 0.9)); }
     else { panX -= e.deltaX; panY -= e.deltaY; applyTransform(); }
   }, { passive: false });
+  bindTextLayer();
 }
 
-// 单条 stroke 画到某 context
+function onDown(e) {
+  const pt = toLogical(e);
+  if (tool === "pan") { panning = true; panStart = { x: e.clientX - panX, y: e.clientY - panY }; ink.setPointerCapture(e.pointerId); return; }
+  if (tool === "text") return; // 文本层处理
+  ink.setPointerCapture(e.pointerId);
+  if (tool === "lasso") {
+    if (sel && pointInPoly(pt, sel.poly)) { selDragLast = pt; return; }  // 拖动已选中
+    clearSelection(); lassoPts = [pt]; return;
+  }
+  drawing = true;
+  cur = { tool: tool === "highlighter" ? "highlighter" : "pen", color, size, points: [pt] };
+  if (tool === "eraser") { drawing = true; cur = { tool: "eraser", points: [pt] }; eraseAt(pt); }
+}
+function onMove(e) {
+  const pt = toLogical(e);
+  if (panning) { panX = e.clientX - panStart.x; panY = e.clientY - panStart.y; applyTransform(); return; }
+  if (tool === "lasso") {
+    if (selDragLast) { moveSelection(pt.x - selDragLast.x, pt.y - selDragLast.y); selDragLast = pt; return; }
+    if (lassoPts) { lassoPts.push(pt); drawLasso(); }
+    return;
+  }
+  if (!drawing) return;
+  if (tool === "eraser") { cur.points.push(pt); eraseAt(pt); return; }
+  cur.points.push(pt); drawStrokeLive();
+}
+function onUp() {
+  if (panning) { panning = false; return; }
+  if (tool === "lasso") {
+    if (selDragLast) { selDragLast = null; save(); renderInk(); drawSelection(); return; }
+    if (lassoPts && lassoPts.length > 2) finalizeLasso();
+    lassoPts = null; return;
+  }
+  if (!drawing) return;
+  drawing = false;
+  if (tool === "eraser") { cur = null; return; }
+  if (cur && cur.points.length) {
+    if (tool === "shape") cur = recognizeShape(cur);
+    pushUndo(); curPage().strokes.push(cur); save(); renderInk(); renderThumbs();
+  }
+  cur = null;
+}
+
+// 单条 stroke 画到 context
 function strokePath(ctx, s) {
-  const pts = s.points;
-  if (!pts.length) return;
+  const pts = s.points; if (!pts.length) return;
   ctx.lineJoin = "round"; ctx.lineCap = "round";
-  if (s.tool === "highlighter") {
-    ctx.globalAlpha = 0.35; ctx.strokeStyle = s.color; ctx.lineWidth = s.size * 3;
-  } else {
-    ctx.globalAlpha = 1; ctx.strokeStyle = s.color; ctx.lineWidth = s.size;
-  }
-  if (pts.length === 1) {
-    ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, ctx.lineWidth / 2, 0, Math.PI * 2);
-    ctx.fillStyle = s.color; ctx.fill(); ctx.globalAlpha = 1; return;
-  }
-  // 压感：钢笔按每段压力微调线宽，分段描边
+  if (s.tool === "highlighter") { ctx.globalAlpha = 0.35; ctx.strokeStyle = s.color; ctx.lineWidth = s.size * 3; }
+  else { ctx.globalAlpha = 1; ctx.strokeStyle = s.color; ctx.lineWidth = s.size; }
+  if (pts.length === 1) { ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fillStyle = s.color; ctx.fill(); ctx.globalAlpha = 1; return; }
   if (s.tool === "pen") {
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1], b = pts[i];
-      ctx.beginPath();
-      ctx.lineWidth = Math.max(0.5, s.size * (0.5 + (a.p + b.p) / 2));
+      ctx.beginPath(); ctx.lineWidth = Math.max(0.5, s.size * (0.5 + (a.p + b.p) / 2));
       ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
   } else {
     ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.stroke();
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y); ctx.stroke();
   }
   ctx.globalAlpha = 1;
 }
-
-// 实时把当前 stroke 叠加（避免整屏重绘）
 function drawStrokeLive() {
   ictx.clearRect(0, 0, PAGE_W, PAGE_H);
   for (const s of curPage().strokes) strokePath(ictx, s);
   if (cur) strokePath(ictx, cur);
 }
-
-// 橡皮擦：命中笔画则删除
 function eraseAt(pt) {
-  const r = size * 2 + 6;
-  const strokes = curPage().strokes;
-  let hit = -1;
-  for (let i = strokes.length - 1; i >= 0; i--) {
-    if (strokes[i].points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r)) { hit = i; break; }
-  }
+  const r = 14; const strokes = curPage().strokes; let hit = -1;
+  for (let i = strokes.length - 1; i >= 0; i--) if (strokes[i].points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r)) { hit = i; break; }
   if (hit >= 0) { pushUndo(); strokes.splice(hit, 1); save(); renderInk(); renderThumbs(); }
 }
 
-// ---- 页背景（导入的 PDF / 图片）----
+// ═══════════ 套索选择 ═══════════
+function drawLasso() {
+  octx.clearRect(0, 0, PAGE_W, PAGE_H);
+  octx.save(); octx.strokeStyle = "#2f7be6"; octx.lineWidth = 2 / zoom; octx.setLineDash([8 / zoom, 6 / zoom]);
+  octx.beginPath(); octx.moveTo(lassoPts[0].x, lassoPts[0].y);
+  for (const p of lassoPts) octx.lineTo(p.x, p.y);
+  octx.stroke(); octx.restore();
+}
+function pointInPoly(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    if (((yi > pt.y) !== (yj > pt.y)) && (pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function finalizeLasso() {
+  const poly = lassoPts.slice();
+  const idx = [];
+  curPage().strokes.forEach((s, i) => {
+    const inside = s.points.filter((p) => pointInPoly(p, poly)).length;
+    if (inside >= s.points.length * 0.6) idx.push(i);
+  });
+  if (!idx.length) { octx.clearRect(0, 0, PAGE_W, PAGE_H); return; }
+  const strokes = idx.map((i) => curPage().strokes[i]);
+  sel = { strokes, poly };
+  drawSelection();
+}
+function moveSelection(dx, dy) {
+  for (const s of sel.strokes) for (const p of s.points) { p.x += dx; p.y += dy; }
+  for (const p of sel.poly) { p.x += dx; p.y += dy; }
+  renderInk(); drawSelection();
+}
+function drawSelection() {
+  octx.clearRect(0, 0, PAGE_W, PAGE_H);
+  if (!sel) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of sel.strokes) for (const p of s.points) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const pad = 10;
+  octx.save(); octx.strokeStyle = "#2f7be6"; octx.lineWidth = 1.5 / zoom; octx.setLineDash([6 / zoom, 4 / zoom]);
+  octx.strokeRect(x0 - pad, y0 - pad, x1 - x0 + pad * 2, y1 - y0 + pad * 2);
+  octx.fillStyle = "rgba(47,123,230,.06)"; octx.fillRect(x0 - pad, y0 - pad, x1 - x0 + pad * 2, y1 - y0 + pad * 2);
+  octx.restore();
+  // 更新选区多边形为包围盒（便于命中拖动）
+  sel.poly = [{ x: x0 - pad, y: y0 - pad }, { x: x1 + pad, y: y0 - pad }, { x: x1 + pad, y: y1 + pad }, { x: x0 - pad, y: y1 + pad }];
+}
+function deleteSelection() {
+  if (!sel) return;
+  pushUndo();
+  curPage().strokes = curPage().strokes.filter((s) => !sel.strokes.includes(s));
+  clearSelection(); save(); renderInk(); renderThumbs();
+}
+function clearSelection() { sel = null; selDragLast = null; lassoPts = null; octx.clearRect(0, 0, PAGE_W, PAGE_H); }
+
+// ═══════════ 形状识别 ═══════════
+function recognizeShape(stroke) {
+  const pts = stroke.points; const base = { tool: "pen", color: stroke.color, size: stroke.size };
+  if (pts.length < 3) return stroke;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const diag = Math.hypot(x1 - x0, y1 - y0);
+  const closed = Math.hypot(pts[0].x - pts.at(-1).x, pts[0].y - pts.at(-1).y) < diag * 0.25;
+  const corners = rdp(pts, diag * 0.06);
+  const mk = (arr) => ({ ...base, points: densify(arr).map((p) => ({ ...p, p: 0.6 })) });
+  if (!closed) {
+    // 开放：判断是否近似直线
+    return mk([{ x: pts[0].x, y: pts[0].y }, { x: pts.at(-1).x, y: pts.at(-1).y }]);
+  }
+  const n = corners.length - 1; // 去掉重复闭合点
+  if (n === 3) return mk([...corners.slice(0, 3), corners[0]]);            // 三角形
+  if (n === 4) return mk([{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }, { x: x0, y: y0 }]); // 矩形
+  return mk(ellipsePts(x0, y0, x1, y1));                                    // 圆/椭圆
+}
+function ellipsePts(x0, y0, x1, y1) {
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, rx = (x1 - x0) / 2, ry = (y1 - y0) / 2, out = [];
+  for (let a = 0; a <= Math.PI * 2 + 0.01; a += Math.PI / 32) out.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+  return out;
+}
+function densify(arr) {
+  const out = [];
+  for (let i = 0; i < arr.length - 1; i++) {
+    const a = arr[i], b = arr[i + 1], d = Math.hypot(b.x - a.x, b.y - a.y), steps = Math.max(1, Math.round(d / 8));
+    for (let s = 0; s < steps; s++) out.push({ x: a.x + (b.x - a.x) * s / steps, y: a.y + (b.y - a.y) * s / steps });
+  }
+  out.push(arr.at(-1)); return out;
+}
+function rdp(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  let maxD = 0, idx = 0; const a = pts[0], b = pts.at(-1);
+  for (let i = 1; i < pts.length - 1; i++) { const d = pointLineDist(pts[i], a, b); if (d > maxD) { maxD = d; idx = i; } }
+  if (maxD > eps) { const l = rdp(pts.slice(0, idx + 1), eps), r = rdp(pts.slice(idx), eps); return l.slice(0, -1).concat(r); }
+  return [a, b];
+}
+function pointLineDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, L = dx * dx + dy * dy;
+  if (!L) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+// ═══════════ 文本框 ═══════════
+let activeText = null;
+function bindTextLayer() {
+  textLayer.addEventListener("pointerdown", (e) => {
+    if (tool !== "text") return;
+    if (e.target === textLayer) {
+      const r = textLayer.getBoundingClientRect();
+      const x = (e.clientX - r.left) / zoom, y = (e.clientY - r.top) / zoom;
+      createText({ id: null, x, y, w: 300, content: "", color, size: Math.max(16, size * 6) }, true);
+    }
+  });
+}
+function renderTexts() {
+  textLayer.innerHTML = "";
+  for (const t of curPage().texts || []) mountText(t, false);
+}
+async function createText(t, edit) {
+  if (t.id === null) t.id = await uid();
+  curPage().texts = curPage().texts || [];
+  curPage().texts.push(t);
+  mountText(t, edit); save();
+}
+function mountText(t, edit) {
+  const el = document.createElement("div");
+  el.className = "text-box"; el.contentEditable = "true"; el.spellcheck = false;
+  el.style.left = t.x + "px"; el.style.top = t.y + "px";
+  el.style.color = t.color; el.style.fontSize = t.size + "px"; el.style.minWidth = "40px";
+  el.textContent = t.content;
+  let dragging = false, moved = false, start = null, origin = null;
+  el.addEventListener("pointerdown", (e) => {
+    if (tool !== "text") return;
+    if (el.classList.contains("editing")) return;      // 编辑中不拖
+    e.preventDefault(); dragging = true; moved = false;
+    start = { x: e.clientX, y: e.clientY }; origin = { x: t.x, y: t.y };
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = (e.clientX - start.x) / zoom, dy = (e.clientY - start.y) / zoom;
+    if (Math.hypot(dx * zoom, dy * zoom) > 4) moved = true;
+    t.x = origin.x + dx; t.y = origin.y + dy; el.style.left = t.x + "px"; el.style.top = t.y + "px";
+  });
+  el.addEventListener("pointerup", (e) => {
+    if (!dragging) return; dragging = false;
+    if (moved) { save(); } else { el.classList.add("editing"); el.focus(); placeCaretEnd(el); }
+  });
+  el.addEventListener("blur", () => {
+    el.classList.remove("editing"); t.content = el.textContent;
+    if (!t.content.trim()) { curPage().texts = curPage().texts.filter((x) => x.id !== t.id); el.remove(); }
+    save();
+  });
+  textLayer.appendChild(el);
+  if (edit) { el.classList.add("editing"); setTimeout(() => el.focus(), 0); }
+}
+function placeCaretEnd(el) { const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+function closeText() { if (document.activeElement && document.activeElement.classList?.contains("text-box")) document.activeElement.blur(); }
+
+// ═══════════ 纸张模板 ═══════════
+function baseOf(tpl) {
+  if (["blank", "lined", "grid", "cornell"].includes(tpl)) return tpl;
+  const c = customTemplates.find((t) => t.id === tpl); return c ? c.base : "blank";
+}
+function paintTemplate(cx, page) {
+  cx.fillStyle = "#ffffff"; cx.fillRect(0, 0, PAGE_W, PAGE_H);
+  const img = getBg(page);
+  if (img && img.complete && img.naturalWidth) { const sc = PAGE_W / img.naturalWidth; cx.drawImage(img, 0, 0, PAGE_W, img.naturalHeight * sc); }
+  const b = baseOf(page.template || "blank");
+  cx.strokeStyle = "#c9d6e5"; cx.lineWidth = 1;
+  if (b === "lined") { for (let y = 90; y < PAGE_H; y += 46) line(cx, 50, y, PAGE_W - 50, y); }
+  else if (b === "grid") { for (let x = 46; x < PAGE_W; x += 46) line(cx, x, 0, x, PAGE_H); for (let y = 46; y < PAGE_H; y += 46) line(cx, 0, y, PAGE_W, y); }
+  else if (b === "cornell") {
+    // 网格纸 + 右侧竖线 + 下方横线（康奈尔）
+    for (let x = 46; x < PAGE_W; x += 46) line(cx, x, 0, x, PAGE_H);
+    for (let y = 46; y < PAGE_H; y += 46) line(cx, 0, y, PAGE_W, y);
+    cx.strokeStyle = "#e2453b"; cx.lineWidth = 2.5;
+    const cueX = PAGE_W - 320, sumY = PAGE_H - 300;
+    line(cx, cueX, 0, cueX, sumY);   // 右侧竖线（提示栏）
+    line(cx, 0, sumY, PAGE_W, sumY); // 下方横线（总结栏）
+  }
+}
+function line(cx, x0, y0, x1, y1) { cx.beginPath(); cx.moveTo(x0, y0); cx.lineTo(x1, y1); cx.stroke(); }
 function getBg(page) {
   if (!page.bg) return null;
   if (bgCache.has(page.id)) return bgCache.get(page.id);
-  const img = new Image();
-  img.onload = () => { if (page === curPage()) drawPaper(); renderThumbs(); };
-  img.src = page.bg;
-  bgCache.set(page.id, img);
-  return img;
+  const img = new Image(); img.onload = () => { if (page === curPage()) drawPaper(); renderThumbs(); };
+  img.src = page.bg; bgCache.set(page.id, img); return img;
 }
-
-// ---- 渲染 ----
-function renderAll() { drawPaper(); renderInk(); renderThumbs(); }
-
-// 把纸张纹理画到任意 context（导出/缩略图复用）
-function paintPaper(cx, page) {
-  cx.fillStyle = "#ffffff"; cx.fillRect(0, 0, PAGE_W, PAGE_H);
-  const img = getBg(page);
-  if (img && img.complete && img.naturalWidth) {
-    // 按比例居中铺满宽度
-    const scale = PAGE_W / img.naturalWidth;
-    const h = img.naturalHeight * scale;
-    cx.drawImage(img, 0, 0, PAGE_W, h);
-  }
-  cx.strokeStyle = "#c9d6e5"; cx.lineWidth = 1;
-  if (page.paper === "lined") {
-    for (let y = 80; y < PAGE_H; y += 44) { cx.beginPath(); cx.moveTo(40, y); cx.lineTo(PAGE_W - 40, y); cx.stroke(); }
-  } else if (page.paper === "grid") {
-    for (let x = 40; x < PAGE_W; x += 40) { cx.beginPath(); cx.moveTo(x, 0); cx.lineTo(x, PAGE_H); cx.stroke(); }
-    for (let y = 40; y < PAGE_H; y += 40) { cx.beginPath(); cx.moveTo(0, y); cx.lineTo(PAGE_W, y); cx.stroke(); }
-  }
-}
-
-function drawPaper() {
-  pctx.clearRect(0, 0, PAGE_W, PAGE_H);
-  paintPaper(pctx, curPage());
-}
-function renderInk() {
-  ictx.clearRect(0, 0, PAGE_W, PAGE_H);
-  for (const s of curPage().strokes) strokePath(ictx, s);
-}
-
-// 页面缩略图
-function renderThumbs() {
-  if ($("#sidebar").classList.contains("hidden")) return;
-  const list = $("#pageList");
-  list.innerHTML = nb.pages.map((p, i) =>
-    `<div class="page-thumb ${i === pageIdx ? "active" : ""}" data-i="${i}">
-       <canvas width="180" height="240"></canvas>
-       <span class="num">${i + 1}</span>
-       ${nb.pages.length > 1 ? '<button class="del" data-del="' + i + '">×</button>' : ""}
-     </div>`).join("");
-  $$("#pageList .page-thumb").forEach((el) => {
-    const i = +el.dataset.i;
-    const c = el.querySelector("canvas"), cx = c.getContext("2d");
-    const sx = c.width / PAGE_W, sy = c.height / PAGE_H;
-    cx.save(); cx.scale(sx, sy);
-    paintPaper(cx, nb.pages[i]);
-    for (const s of nb.pages[i].strokes) strokePath(cx, s);
-    cx.restore();
-    el.addEventListener("click", (e) => {
-      if (e.target.dataset.del != null) return;
-      gotoPage(i);
-    });
-    const del = el.querySelector("[data-del]");
-    if (del) del.addEventListener("click", (e) => { e.stopPropagation(); deletePage(+del.dataset.del); });
+function buildTemplatePicker() {
+  const builtins = [{ id: "blank", name: "空白" }, { id: "lined", name: "横线" }, { id: "grid", name: "网格" }, { id: "cornell", name: "康奈尔" }];
+  const all = builtins.concat(customTemplates.map((t) => ({ id: t.id, name: t.name, custom: true })));
+  const cur = curPage().template || "blank";
+  $("#tplGrid").innerHTML = all.map((t) => `<div class="tpl ${t.id === cur ? "on" : ""}" data-t="${t.id}"><canvas width="60" height="80"></canvas><span class="tn">${escapeHtml(t.name)}</span>${t.custom ? `<span class="tdel" data-del="${t.id}">✕</span>` : ""}</div>`).join("");
+  $$("#tplGrid .tpl").forEach((el) => {
+    const c = el.querySelector("canvas"), cx = c.getContext("2d"); cx.scale(c.width / PAGE_W, c.height / PAGE_H);
+    paintTemplate(cx, { template: el.dataset.t, bg: null, id: "prev" });
+    el.addEventListener("click", (e) => { if (e.target.dataset.del != null) return; setTemplate(el.dataset.t); });
+    const del = el.querySelector("[data-del]"); if (del) del.addEventListener("click", (e) => { e.stopPropagation(); delTemplate(del.dataset.del); });
   });
 }
-
-function gotoPage(i) {
-  pageIdx = i; $("#paperSel").value = curPage().paper;
-  undoStack.length = 0; redoStack.length = 0;
-  renderAll();
+function setTemplate(t) { curPage().template = t; save(); drawPaper(); renderThumbs(); buildTemplatePicker(); }
+async function newTemplate() {
+  const name = prompt("模板名称：", "我的模板"); if (!name) return;
+  const base = (prompt("基于哪种底纹？输入：blank / lined / grid / cornell", "grid") || "grid").trim();
+  const t = { id: await uid(), name: name.trim(), base: ["blank", "lined", "grid", "cornell"].includes(base) ? base : "grid" };
+  customTemplates.push(t); window.api.updateSettings({ customTemplates });
+  setTemplate(t.id); toast("模板已创建");
+}
+function delTemplate(id) {
+  customTemplates = customTemplates.filter((t) => t.id !== id);
+  window.api.updateSettings({ customTemplates });
+  if (curPage().template === id) setTemplate("blank"); else buildTemplatePicker();
 }
 
-// ---- 页面 / 笔记本操作 ----
-async function addPage(opts = {}) {
-  const id = await window.api.newId();
-  nb.pages.splice(pageIdx + 1, 0, { id, paper: opts.paper || curPage().paper, bg: opts.bg || null, strokes: [] });
-  pageIdx += 1;
+// ═══════════ 渲染 ═══════════
+function renderAll() { applyTransform(); drawPaper(); renderInk(); renderTexts(); renderThumbs(); $("#btnBookmarkPage").textContent = curPage().bookmark ? "★" : "☆"; }
+function drawPaper() { pctx.clearRect(0, 0, PAGE_W, PAGE_H); paintTemplate(pctx, curPage()); }
+function renderInk() { ictx.clearRect(0, 0, PAGE_W, PAGE_H); for (const s of curPage().strokes) strokePath(ictx, s); }
+function renderThumbs() {
+  if ($("#sidebar").classList.contains("hidden") || drawerMode !== "pages") return;
+  const list = $("#pageList");
+  list.innerHTML = nb.pages.map((p, i) => `<div class="page-thumb ${i === pageIdx ? "active" : ""}" draggable="true" data-i="${i}"><canvas width="150" height="212"></canvas><span class="num">${i + 1}</span>${p.bookmark ? '<span class="bm">🔖</span>' : ""}${nb.pages.length > 1 ? `<button class="del" data-del="${i}">×</button>` : ""}</div>`).join("");
+  $$("#pageList .page-thumb").forEach((el) => {
+    const i = +el.dataset.i, c = el.querySelector("canvas"), cx = c.getContext("2d");
+    cx.save(); cx.scale(c.width / PAGE_W, c.height / PAGE_H);
+    paintTemplate(cx, nb.pages[i]); for (const s of nb.pages[i].strokes) strokePath(cx, s); cx.restore();
+    el.addEventListener("click", (e) => { if (e.target.dataset.del != null) return; gotoPage(i); });
+    const del = el.querySelector("[data-del]"); if (del) del.addEventListener("click", (e) => { e.stopPropagation(); deletePage(i); });
+    bindThumbDrag(el, i);
+  });
+}
+// 页面拖拽重排
+let dragIdx = null;
+function bindThumbDrag(el, i) {
+  el.addEventListener("dragstart", () => { dragIdx = i; el.classList.add("dragging"); });
+  el.addEventListener("dragend", () => { el.classList.remove("dragging"); $$(".page-thumb").forEach((x) => x.classList.remove("drop-target")); });
+  el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("drop-target"); });
+  el.addEventListener("dragleave", () => el.classList.remove("drop-target"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault(); if (dragIdx === null || dragIdx === i) return;
+    const [moved] = nb.pages.splice(dragIdx, 1); nb.pages.splice(i, 0, moved);
+    const curId = curPage()?.id; pageIdx = nb.pages.findIndex((p) => p.id === curId);
+    dragIdx = null; save(); renderThumbs();
+  });
+}
+function gotoPage(i) {
+  closeText(); clearSelection(); pageIdx = i;
   undoStack.length = 0; redoStack.length = 0;
-  save(); renderAll();
-  if (!opts.silent) toast("已新增页面");
+  buildTemplatePicker(); renderAll();
+}
+
+// ═══════════ 页面操作 ═══════════
+async function addPage(opts = {}) {
+  const id = await uid();
+  nb.pages.splice(pageIdx + 1, 0, { id, template: opts.template || curPage().template, bg: opts.bg || null, bookmark: null, strokes: [], texts: [] });
+  pageIdx += 1; undoStack.length = 0; redoStack.length = 0;
+  save(); renderAll(); if (!opts.silent) toast("已新增页面");
   return curPage();
 }
 function deletePage(i) {
   if (nb.pages.length <= 1) return;
-  if (!confirm(`删除第 ${i + 1} 页？此操作不可撤销。`)) return;
-  bgCache.delete(nb.pages[i].id);
-  nb.pages.splice(i, 1);
+  if (!confirm(`删除第 ${i + 1} 页？`)) return;
+  bgCache.delete(nb.pages[i].id); nb.pages.splice(i, 1);
   if (pageIdx >= nb.pages.length) pageIdx = nb.pages.length - 1;
   save(); renderAll();
 }
-function renameNotebook() {
-  const t = prompt("笔记本名称：", nb.title);
-  if (t && t.trim()) { nb.title = t.trim(); $("#nbTitle").textContent = nb.title; save(); }
-}
+function renameCurrent() { const t = prompt("笔记本名称：", nb.title); if (t && t.trim()) { nb.title = t.trim(); $("#nbTitle").textContent = nb.title; save(); } }
 
-// ---- undo / redo ----
+// ═══════════ undo / redo ═══════════
 function snapshot() { return JSON.parse(JSON.stringify(curPage().strokes)); }
-function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
-function undo() {
-  if (!undoStack.length) return;
-  redoStack.push(snapshot());
-  curPage().strokes = undoStack.pop();
-  save(); renderInk(); renderThumbs();
-}
-function redo() {
-  if (!redoStack.length) return;
-  undoStack.push(snapshot());
-  curPage().strokes = redoStack.pop();
-  save(); renderInk(); renderThumbs();
-}
+function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 120) undoStack.shift(); redoStack.length = 0; }
+function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); curPage().strokes = undoStack.pop(); save(); renderInk(); renderThumbs(); }
+function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); curPage().strokes = redoStack.pop(); save(); renderInk(); renderThumbs(); }
+
 function bindKeys() {
   window.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
-    if (e.key === "p") selectTool("pen");
-    if (e.key === "h") selectTool("highlighter");
-    if (e.key === "e") selectTool("eraser");
-    if (/^[1-9]$/.test(e.key) && pens[+e.key - 1]) usePen(+e.key - 1);
+    if ($("#editor").classList.contains("hidden")) return;
+    const editing = e.target.classList?.contains("text-box") || e.target.tagName === "INPUT";
+    if (editing) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
+    if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); deleteSelection(); return; }
+    // 方向键移动画布
+    const step = e.shiftKey ? 200 : 80;
+    if (e.key === "ArrowLeft") { e.preventDefault(); panX += step; applyTransform(); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); panX -= step; applyTransform(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); panY += step; applyTransform(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); panY -= step; applyTransform(); }
+    else if (e.key === "p") usePenTool("pen");
+    else if (e.key === "h") usePenTool("highlighter");
+    else if (e.key === "e") selectTool("eraser");
+    else if (e.key === "v") selectTool("lasso");
+    else if (e.key === "t") selectTool("text");
+    else if (/^[1-9]$/.test(e.key) && pens[+e.key - 1]) usePen(+e.key - 1);
   });
 }
+function usePenTool(t) { tool = t; selectTool(t); }
 
-// ---- 持久化 ----
+// ═══════════ 持久化 ═══════════
 let saveTimer;
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => window.api.saveNotebooks(state.notebooks), 400);
-}
+function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => window.api.saveNotebooks(state.notebooks), 400); }
 function saveNow() { clearTimeout(saveTimer); return window.api.saveNotebooks(state.notebooks); }
 
-// ---- busy 遮罩 ----
-function busy(on, text) {
-  const b = $("#busy");
-  if (text) $("#busyText").textContent = text;
-  b.classList.toggle("hidden", !on);
-}
-
-// ---- 合成整页（背景+纹理+墨迹）到离屏 canvas ----
+// ═══════════ busy / 合成 ═══════════
+function busy(on, text) { const b = $("#busy"); if (text) $("#busyText").textContent = text; b.classList.toggle("hidden", !on); }
 function flattenPage(i) {
-  const c = document.createElement("canvas");
-  c.width = PAGE_W; c.height = PAGE_H;
-  const cx = c.getContext("2d");
-  paintPaper(cx, nb.pages[i]);
+  const c = document.createElement("canvas"); c.width = PAGE_W; c.height = PAGE_H;
+  const cx = c.getContext("2d"); paintTemplate(cx, nb.pages[i]);
   for (const s of nb.pages[i].strokes) strokePath(cx, s);
+  for (const t of nb.pages[i].texts || []) { cx.fillStyle = t.color; cx.font = `${t.size}px sans-serif`; cx.textBaseline = "top"; (t.content || "").split("\n").forEach((ln, k) => cx.fillText(ln, t.x + 4, t.y + 2 + k * t.size * 1.3)); }
   return c;
 }
 
-// ---- 导出：图片 ----
+// ═══════════ 导出 ═══════════
 async function exportRaster(ext) {
   const c = flattenPage(pageIdx);
   const dataUrl = ext === "jpg" ? c.toDataURL("image/jpeg", 0.95) : c.toDataURL("image/png");
   const res = await window.api.exportImage({ dataUrl, ext, suggested: `${nb.title}-第${pageIdx + 1}页.${ext}` });
   if (res.ok) toast(`已导出 ${ext.toUpperCase()}`);
 }
-
-// ---- 导出：整本 PDF ----
 async function exportPdf() {
-  busy(true, "正在生成 PDF…");
-  await new Promise((r) => setTimeout(r, 30));
+  busy(true, "正在生成 PDF…"); await new Promise((r) => setTimeout(r, 30));
   try {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: "portrait", unit: "px", format: [PAGE_W, PAGE_H] });
-    for (let i = 0; i < nb.pages.length; i++) {
-      if (i > 0) doc.addPage([PAGE_W, PAGE_H], "portrait");
-      const img = flattenPage(i).toDataURL("image/jpeg", 0.92);
-      doc.addImage(img, "JPEG", 0, 0, PAGE_W, PAGE_H);
-    }
-    const buffer = doc.output("arraybuffer");
-    const res = await window.api.exportPdf({ buffer, suggested: `${nb.title}.pdf` });
+    for (let i = 0; i < nb.pages.length; i++) { if (i > 0) doc.addPage([PAGE_W, PAGE_H], "portrait"); doc.addImage(flattenPage(i).toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, PAGE_W, PAGE_H); }
+    const res = await window.api.exportPdf({ buffer: doc.output("arraybuffer"), suggested: `${nb.title}.pdf` });
     if (res.ok) toast("已导出 PDF");
   } finally { busy(false); }
 }
 
-// ---- 导入：图片（贴为当前页背景，若当前页已有笔迹则新建一页）----
+// ═══════════ 导入 ═══════════
 async function importImage() {
-  const res = await window.api.importImage();
-  if (!res.ok) return;
-  await placeBg(res.dataUrl);
-  toast("图片已导入");
+  const res = await window.api.importImage(); if (!res.ok) return;
+  await placeBg(res.dataUrl); toast("图片已导入");
 }
 async function placeBg(dataUrl) {
-  const target = curPage().strokes.length || curPage().bg
-    ? await addPage({ bg: dataUrl, paper: "blank", silent: true })
-    : curPage();
-  target.bg = dataUrl;
-  bgCache.delete(target.id);
-  await saveNow(); renderAll();
+  const target = (curPage().strokes.length || curPage().bg) ? await addPage({ bg: dataUrl, template: "blank", silent: true }) : curPage();
+  target.bg = dataUrl; bgCache.delete(target.id); await saveNow(); renderAll();
 }
-
-// ---- 导入：PDF（pdf.js 逐页栅格化为页背景）----
 async function importPdf() {
-  const res = await window.api.importPdf();
-  if (!res.ok) return;
+  const res = await window.api.importPdf(); if (!res.ok) return;
   busy(true, "正在解析 PDF…");
   try {
     const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(res.buffer) }).promise;
     for (let n = 1; n <= pdf.numPages; n++) {
       busy(true, `导入 PDF 第 ${n}/${pdf.numPages} 页…`);
-      const page = await pdf.getPage(n);
-      const vp0 = page.getViewport({ scale: 1 });
-      const scale = PAGE_W / vp0.width;
-      const vp = page.getViewport({ scale });
-      const c = document.createElement("canvas");
-      c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      const page = await pdf.getPage(n), vp0 = page.getViewport({ scale: 1 }), scale = PAGE_W / vp0.width, vp = page.getViewport({ scale });
+      const c = document.createElement("canvas"); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
       await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
       const dataUrl = c.toDataURL("image/jpeg", 0.85);
-      // 首页贴到空白当前页，其余新建
-      const empty = curPage().strokes.length === 0 && !curPage().bg;
-      const target = (n === 1 && empty) ? curPage() : await addPage({ bg: dataUrl, paper: "blank", silent: true });
-      target.bg = dataUrl; target.paper = "blank";
-      bgCache.delete(target.id);
+      const empty = !curPage().strokes.length && !curPage().bg;
+      const target = (n === 1 && empty) ? curPage() : await addPage({ bg: dataUrl, template: "blank", silent: true });
+      target.bg = dataUrl; target.template = "blank"; bgCache.delete(target.id);
     }
     nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
-    await saveNow(); gotoPage(0);
-    toast(`已导入 PDF（${pdf.numPages} 页）`);
-  } catch (err) {
-    console.error(err); alert("PDF 导入失败：" + err.message);
-  } finally { busy(false); }
+    await saveNow(); gotoPage(0); toast(`已导入 PDF（${pdf.numPages} 页）`);
+  } catch (err) { console.error(err); alert("PDF 导入失败：" + err.message); } finally { busy(false); }
 }
 
-// ==== Xournal++ .xopp ====
-// xopp 是 gzip 压缩的 XML。坐标单位与我们的逻辑坐标一致（1:1 px 映射）。
+// ═══════════ .xopp（Xournal++） ═══════════
 const XO_W = PAGE_W, XO_H = PAGE_H;
-
-function toHexColor(c) {
-  // #rrggbb -> #rrggbbff（xournal 用 8 位含 alpha）
-  if (/^#[0-9a-f]{6}$/i.test(c)) return c + "ff";
-  return c;
-}
-function fromHexColor(c) {
-  if (/^#[0-9a-f]{8}$/i.test(c)) return c.slice(0, 7);
-  return c;
-}
+const toHex = (c) => /^#[0-9a-f]{6}$/i.test(c) ? c + "ff" : c;
+const fromHex = (c) => /^#[0-9a-f]{8}$/i.test(c) ? c.slice(0, 7) : c;
 function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function escapeHtml(s) { return esc(s); }
 
 async function exportXopp() {
   await saveNow();
-  const out = [];
-  out.push(`<?xml version="1.0" standalone="no"?>`);
-  out.push(`<xournal creator="手写笔记 (Notes Plus clone)" fileversion="4">`);
-  out.push(`<title>${esc(nb.title)}</title>`);
+  const out = [`<?xml version="1.0" standalone="no"?>`, `<xournal creator="手写笔记 (Notes Plus clone)" fileversion="4">`, `<title>${esc(nb.title)}</title>`];
   for (const page of nb.pages) {
+    const b = baseOf(page.template || "blank");
     out.push(`<page width="${XO_W}" height="${XO_H}">`);
-    out.push(`<background type="solid" color="#ffffffff" style="${page.paper === "grid" ? "graph" : page.paper === "lined" ? "lined" : "plain"}"/>`);
+    out.push(`<background type="solid" color="#ffffffff" style="${b === "grid" || b === "cornell" ? "graph" : b === "lined" ? "lined" : "plain"}"/>`);
     out.push(`<layer>`);
     for (const s of page.strokes) {
       const tool = s.tool === "highlighter" ? "highlighter" : "pen";
-      const col = toHexColor(s.color);
-      // 每点带宽度（压感）：width 首值为基准，其余为逐点宽度
-      const widths = s.points.map((p, i) => {
-        const w = s.tool === "highlighter" ? s.size * 3 : Math.max(0.5, s.size * (0.5 + (p.p ?? 0.5)));
-        return +w.toFixed(2);
-      });
-      const coords = s.points.map((p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ");
-      out.push(`<stroke tool="${tool}" color="${col}" width="${widths.join(" ")}">${coords}</stroke>`);
+      const widths = s.points.map((p) => +(s.tool === "highlighter" ? s.size * 3 : Math.max(0.5, s.size * (0.5 + (p.p ?? 0.5)))).toFixed(2));
+      out.push(`<stroke tool="${tool}" color="${toHex(s.color)}" width="${widths.join(" ")}">${s.points.map((p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ")}</stroke>`);
     }
+    for (const t of page.texts || []) out.push(`<text font="Sans" size="${t.size}" x="${t.x.toFixed(1)}" y="${t.y.toFixed(1)}" color="${toHex(t.color)}">${esc(t.content)}</text>`);
     out.push(`</layer></page>`);
   }
   out.push(`</xournal>`);
   const res = await window.api.exportXopp({ xml: out.join("\n"), suggested: `${nb.title}.xopp` });
   if (res.ok) toast("已导出 .xopp");
 }
-
 async function importXopp() {
-  const res = await window.api.importXopp();
-  if (!res.ok) return;
+  const res = await window.api.importXopp(); if (!res.ok) return;
   busy(true, "正在解析 .xopp…");
   try {
     const doc = new DOMParser().parseFromString(res.xml, "text/xml");
     if (doc.querySelector("parsererror")) throw new Error("XML 解析失败");
-    const pageEls = [...doc.querySelectorAll("page")];
-    if (!pageEls.length) throw new Error("文件中没有页面");
+    const pageEls = [...doc.querySelectorAll("page")]; if (!pageEls.length) throw new Error("没有页面");
     const pages = [];
     for (const pe of pageEls) {
-      const pw = parseFloat(pe.getAttribute("width")) || XO_W;
-      const ph = parseFloat(pe.getAttribute("height")) || XO_H;
-      const sx = XO_W / pw, sy = XO_H / ph;
+      const pw = parseFloat(pe.getAttribute("width")) || XO_W, ph = parseFloat(pe.getAttribute("height")) || XO_H, sx = XO_W / pw, sy = XO_H / ph;
       const bgStyle = pe.querySelector("background")?.getAttribute("style") || "plain";
-      const paper = bgStyle === "graph" ? "grid" : bgStyle === "lined" || bgStyle === "ruled" ? "lined" : "blank";
-      const strokes = [];
+      const template = bgStyle === "graph" ? "grid" : (bgStyle === "lined" || bgStyle === "ruled") ? "lined" : "blank";
+      const strokes = [], texts = [];
       for (const st of pe.querySelectorAll("layer > stroke, stroke")) {
-        const nums = st.textContent.trim().split(/\s+/).map(Number).filter((n) => !isNaN(n));
-        const pts = [];
+        const nums = st.textContent.trim().split(/\s+/).map(Number).filter((n) => !isNaN(n)), pts = [];
         for (let i = 0; i + 1 < nums.length; i += 2) pts.push({ x: nums[i] * sx, y: nums[i + 1] * sy, p: 0.5 });
         if (!pts.length) continue;
-        const tool = (st.getAttribute("tool") || "pen") === "highlighter" ? "highlighter" : "pen";
-        const color = fromHexColor(st.getAttribute("color") || "#000000ff");
-        const widths = (st.getAttribute("width") || "3").trim().split(/\s+/).map(Number);
-        const base = widths[0] || 3;
-        const size = tool === "highlighter" ? Math.max(1, Math.round(base / 3)) : Math.max(1, Math.round(base));
-        strokes.push({ tool, color, size, points: pts });
+        const tl = (st.getAttribute("tool") || "pen") === "highlighter" ? "highlighter" : "pen";
+        const widths = (st.getAttribute("width") || "3").trim().split(/\s+/).map(Number), base = widths[0] || 3;
+        strokes.push({ tool: tl, color: fromHex(st.getAttribute("color") || "#000000ff"), size: tl === "highlighter" ? Math.max(1, Math.round(base / 3)) : Math.max(1, Math.round(base)), points: pts });
       }
-      const id = await window.api.newId();
-      pages.push({ id, paper, bg: null, strokes });
+      for (const te of pe.querySelectorAll("layer > text, text")) texts.push({ id: await uid(), x: parseFloat(te.getAttribute("x")) * sx || 40, y: parseFloat(te.getAttribute("y")) * sy || 40, w: 300, content: te.textContent, color: fromHex(te.getAttribute("color") || "#000000ff"), size: parseFloat(te.getAttribute("size")) || 20 });
+      pages.push({ id: await uid(), template, bg: null, bookmark: null, strokes, texts });
     }
-    nb.pages = pages;
-    nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
-    bgCache.clear();
-    await saveNow(); gotoPage(0);
-    toast(`已导入 .xopp（${pages.length} 页）`);
-  } catch (err) {
-    console.error(err); alert(".xopp 导入失败：" + err.message);
-  } finally { busy(false); }
+    nb.pages = pages; nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
+    bgCache.clear(); await saveNow(); gotoPage(0); toast(`已导入 .xopp（${pages.length} 页）`);
+  } catch (err) { console.error(err); alert(".xopp 导入失败：" + err.message); } finally { busy(false); }
 }
 
-// ---- toast ----
+// ═══════════ toast ═══════════
 let toastTimer;
-function toast(msg) {
-  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 1300);
-}
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 1300); }
 
 init();
