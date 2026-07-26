@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>手写笔记</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- 顶部工具栏 -->
+<header id="toolbar">
+  <div class="group">
+    <button id="btnMenu" class="tb" title="笔记本 / 页面">☰</button>
+    <span id="nbTitle" class="nb-title" title="点击重命名">我的笔记本</span>
+  </div>
+
+  <div class="group tools">
+    <button class="tb tool" data-tool="pen" title="钢笔（压感）">✒️</button>
+    <button class="tb tool" data-tool="highlighter" title="荧光笔">🖍️</button>
+    <button class="tb tool" data-tool="eraser" title="橡皮擦（按笔画）">🩹</button>
+    <button class="tb tool" data-tool="pan" title="拖动画布">✋</button>
+  </div>
+
+  <div class="group">
+    <div id="palette" class="palette"></div>
+    <input type="color" id="colorCustom" class="color-custom" title="自定义颜色" value="#1a1a1a">
+  </div>
+
+  <div class="group">
+    <label class="size-wrap" title="笔宽">
+      <input type="range" id="sizeRange" min="1" max="24" value="3">
+      <span id="sizeVal">3</span>
+    </label>
+  </div>
+
+  <div class="group">
+    <button id="btnUndo" class="tb" title="撤销 (Ctrl+Z)">↶</button>
+    <button id="btnRedo" class="tb" title="重做 (Ctrl+Y)">↷</button>
+  </div>
+
+  <div class="group">
+    <select id="paperSel" title="纸张模板">
+      <option value="blank">空白</option>
+      <option value="lined">横线</option>
+      <option value="grid">网格</option>
+    </select>
+  </div>
+
+  <div class="group grow"></div>
+
+  <div class="group">
+    <button id="btnZoomOut" class="tb" title="缩小">－</button>
+    <span id="zoomVal" class="zoom">100%</span>
+    <button id="btnZoomIn" class="tb" title="放大">＋</button>
+    <button id="btnZoomFit" class="tb" title="适应">⤢</button>
+  </div>
+
+  <div class="group">
+    <button id="btnExportPng" class="tb text">导出 PNG</button>
+    <button id="btnExportPdf" class="tb text">导出 PDF</button>
+  </div>
+</header>
+
+<div id="body">
+  <!-- 页面侧栏 -->
+  <aside id="sidebar" class="hidden">
+    <div class="side-head">
+      <span>页面</span>
+      <button id="btnAddPage" class="tb small" title="新增页面">＋</button>
+    </div>
+    <div id="pageList" class="page-list"></div>
+  </aside>
+
+  <!-- 画布区 -->
+  <main id="stage">
+    <div id="canvasWrap">
+      <canvas id="paper"></canvas>
+      <canvas id="ink"></canvas>
+    </div>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "name": "notes-plus-clone",
+  "version": "1.0.0",
+  "description": "手写笔记应用（Notes Plus 风格）：压感手写 / 荧光笔 / 多页笔记本 / 导出 PDF",
+  "main": "src/main/index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "jspdf": "^2.5.2"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.notesplus.clone",
+    "productName": "手写笔记",
+    "directories": { "output": "release" },
+    "files": ["src/**/*", "node_modules/**/*", "package.json"],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "手写笔记"
+    },
+    "linux": { "target": ["AppImage"], "category": "Office" }
+  }
+}
