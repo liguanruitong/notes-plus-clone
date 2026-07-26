@@ -29,6 +29,17 @@ async function init() {
   const s = state.settings;
   tool = s.lastTool || "pen"; color = s.lastColor || "#1a1a1a"; size = s.lastSize || 3;
   pens = s.pens || []; activePen = s.activePen || 0; customTemplates = s.customTemplates || [];
+  if (!pens.length) {
+    // 预置笔盘：黑钢笔 / 红马克 / 蓝圆珠 / 黄荧光 / 灰铅笔
+    pens = [
+      { tool: "pen", color: "#1c1c1e", size: 3 },
+      { tool: "pen", color: "#e2453b", size: 5 },
+      { tool: "pen", color: "#0a84ff", size: 3 },
+      { tool: "highlighter", color: "#ffd60a", size: 16 },
+      { tool: "pen", color: "#8e8e93", size: 2 },
+    ];
+    window.api.updateSettings({ pens, activePen: 0 });
+  }
 
   for (const c of [paper, ink, overlay]) { c.width = PAGE_W; c.height = PAGE_H; }
   bindShelf();
@@ -70,10 +81,10 @@ function renderShelf() {
   $$("#shelfGrid .nb-card").forEach((el) => {
     el.addEventListener("click", (e) => { if (e.target.dataset.menu != null) return; openNotebook(el.dataset.id); });
   });
-  $$("#shelfGrid .nb-menu").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); notebookMenu(el.dataset.menu); }));
+  $$("#shelfGrid .nb-menu").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); notebookMenu(el.dataset.menu, el); }));
 }
 async function newNotebook() {
-  const title = prompt("笔记本名称：", "新笔记本");
+  const title = await modalInput({ title: "新建笔记本", desc: "给你的笔记本起个名字", value: "新笔记本", placeholder: "笔记本名称" });
   if (title === null) return;
   const palette = ["#4c8dff", "#e2453b", "#1f9d55", "#f5a623", "#8e44ad", "#16b1c4"];
   const cover = palette[state.notebooks.length % palette.length];
@@ -84,14 +95,26 @@ async function newNotebook() {
   renderShelf();
   openNotebook(n.id);
 }
-function notebookMenu(id) {
+function notebookMenu(id, anchor) {
   const n = state.notebooks.find((x) => x.id === id);
-  const act = prompt(`「${n.title}」\n输入操作：\n  r = 重命名\n  d = 删除\n  c = 换封面颜色`, "r");
-  if (act === "r") { const t = prompt("新名称：", n.title); if (t && t.trim()) n.title = t.trim(); }
-  else if (act === "d") { if (!confirm(`删除笔记本「${n.title}」？不可恢复。`)) return; state.notebooks = state.notebooks.filter((x) => x.id !== id); }
-  else if (act === "c") { const c = prompt("封面颜色（如 #e2453b）：", n.cover); if (c) n.cover = c.trim(); }
-  else return;
-  window.api.saveNotebooks(state.notebooks); renderShelf();
+  if (!n) return;
+  showCtxMenu(anchor, [
+    { label: "打开", onClick: () => openNotebook(id) },
+    { label: "重命名", onClick: async () => {
+        const t = await modalInput({ title: "重命名笔记本", value: n.title, placeholder: "笔记本名称" });
+        if (t && t.trim()) { n.title = t.trim(); await window.api.saveNotebooks(state.notebooks); renderShelf(); }
+      } },
+    { label: "换封面", onClick: async () => {
+        const c = await modalSwatch({ title: "选择封面颜色", colors: COVER_PALETTE, current: n.cover });
+        if (c) { n.cover = c; await window.api.saveNotebooks(state.notebooks); renderShelf(); }
+      } },
+    { label: "删除", danger: true, onClick: async () => {
+        const ok = await modalConfirm({ title: "删除笔记本", desc: `「${n.title}」将被删除，不可恢复。`, okText: "删除", danger: true });
+        if (!ok) return;
+        state.notebooks = state.notebooks.filter((x) => x.id !== id);
+        await window.api.saveNotebooks(state.notebooks); renderShelf();
+      } },
+  ]);
 }
 async function openNotebook(id) {
   nb = state.notebooks.find((x) => x.id === id);
@@ -156,7 +179,24 @@ function buildPens() {
     </button>`;
   }).join("");
   $$("#penRack .pen").forEach((el) => el.addEventListener("click", () => usePen(+el.dataset.i)));
+  renderMyPens();
 }
+// 「更多」面板里的“我的笔”：同一批拟物笔 + 末尾一个＋新增
+function renderMyPens() {
+  const box = $("#myPens"); if (!box) return;
+  box.innerHTML = pens.map((p, i) => {
+    const hl = p.tool === "highlighter" ? "hl" : "";
+    const tip = p.tool === "highlighter" ? p.color : darken(p.color, .6);
+    return `<button class="pen ${i === activePen ? "on" : ""} ${hl}" data-i="${i}" title="${p.tool === "highlighter" ? "荧光笔" : "钢笔"} · ${p.size}px">
+      <span class="tip" style="border-bottom:6px solid ${tip}"></span>
+      <span class="nibdot" style="background:${darken(p.color, .4)}"></span>
+      <span class="body" style="background:${p.color}"></span>
+    </button>`;
+  }).join("") + `<button id="btnAddPen" class="pen-add" title="新增笔">＋</button>`;
+  $$("#myPens .pen").forEach((el) => el.addEventListener("click", () => { usePen(+el.dataset.i); openPenEdit(); }));
+  const add = $("#myPens .pen-add"); if (add) add.addEventListener("click", addPen);
+}
+function openPenEdit() { const pe = $("#penEdit"); if (pe) pe.classList.remove("hidden"); }
 function usePen(i) {
   const p = pens[i]; if (!p) return;
   activePen = i; tool = p.tool; color = p.color; size = p.size;
@@ -183,21 +223,23 @@ function delPen() {
 }
 
 // ═══════════ 顶栏 / Dock / 弹层 ═══════════
+function on(sel, evt, fn) { const el = $(sel); if (el) el.addEventListener(evt, fn); }
 function bindTopbar() {
-  $("#btnBack").addEventListener("click", () => { closeText(); showShelf(); });
-  $("#btnPages").addEventListener("click", () => toggleDrawer("pages"));
-  $("#btnBookmarks").addEventListener("click", () => toggleDrawer("bookmarks"));
-  $("#btnBookmarkPage").addEventListener("click", toggleBookmark);
-  $("#btnAddPage").addEventListener("click", () => addPage());
-  $("#btnZoomFit").addEventListener("click", fitToStage);
-  $("#nbTitle").addEventListener("click", renameCurrent);
+  on("#btnBack", "click", () => { closeText(); showShelf(); });
+  on("#btnPages", "click", () => toggleDrawer("pages"));
+  on("#btnBookmarks", "click", () => toggleDrawer("bookmarks"));
+  on("#btnBookmarkPage", "click", toggleBookmark);
+  on("#btnAddPage", "click", () => addPage());
+  on("#btnZoomFit", "click", fitToStage);
+  on("#btnLocate", "click", fitToStage);
+  on("#nbTitle", "click", renameCurrent);
 }
 function bindDock() {
-  $("#btnUndo").addEventListener("click", undo);
-  $("#btnRedo").addEventListener("click", redo);
-  $("#btnAddPen").addEventListener("click", addPen);
+  on("#btnUndo", "click", undo);
+  on("#btnRedo", "click", redo);
+  on("#btnAddPen", "click", addPen);
   $$("#dock .tool").forEach((b) => b.addEventListener("click", () => selectTool(b.dataset.tool)));
-  $("#btnMore").addEventListener("click", (e) => { e.stopPropagation(); $("#morePanel").classList.toggle("hidden"); });
+  on("#btnMore", "click", (e) => { e.stopPropagation(); $("#morePanel").classList.toggle("hidden"); });
 }
 function bindMorePanel() {
   $("#colorCustom").addEventListener("input", (e) => setColor(e.target.value));
@@ -233,11 +275,11 @@ function toggleDrawer(mode) {
   $("#bookmarkList").classList.toggle("hidden", mode !== "bookmarks");
   if (mode === "pages") renderThumbs(); else renderBookmarks();
 }
-function toggleBookmark() {
+async function toggleBookmark() {
   const p = curPage();
   if (p.bookmark) { p.bookmark = null; toast("已移除书签"); }
-  else { const t = prompt("书签名称：", `第 ${pageIdx + 1} 页`); if (t === null) return; p.bookmark = t.trim() || `第 ${pageIdx + 1} 页`; toast("已加书签"); }
-  $("#btnBookmarkPage").textContent = p.bookmark ? "★" : "☆";
+  else { const t = await modalInput({ title: "添加书签", value: `第 ${pageIdx + 1} 页`, placeholder: "书签名称" }); if (t === null) return; p.bookmark = t.trim() || `第 ${pageIdx + 1} 页`; toast("已加书签"); }
+  const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = p.bookmark ? "★" : "☆";
   save(); if (drawerMode === "bookmarks") renderBookmarks(); renderThumbs();
 }
 function renderBookmarks() {
@@ -548,9 +590,10 @@ function buildTemplatePicker() {
 }
 function setTemplate(t) { curPage().template = t; save(); drawPaper(); renderThumbs(); buildTemplatePicker(); }
 async function newTemplate() {
-  const name = prompt("模板名称：", "我的模板"); if (!name) return;
-  const base = (prompt("基于哪种底纹？输入：blank / lined / grid / cornell", "grid") || "grid").trim();
-  const t = { id: await uid(), name: name.trim(), base: ["blank", "lined", "grid", "cornell"].includes(base) ? base : "grid" };
+  const name = await modalInput({ title: "新建模板", value: "我的模板", placeholder: "模板名称" }); if (!name || !name.trim()) return;
+  const base = await modalSwatch({ title: "选择底纹", desc: "空白 / 横线 / 网格 / 康奈尔", colors: ["blank", "lined", "grid", "cornell"], current: "grid" });
+  const baseVal = ["blank", "lined", "grid", "cornell"].includes(base) ? base : "grid";
+  const t = { id: await uid(), name: name.trim(), base: baseVal };
   customTemplates.push(t); window.api.updateSettings({ customTemplates });
   setTemplate(t.id); toast("模板已创建");
 }
@@ -561,7 +604,7 @@ function delTemplate(id) {
 }
 
 // ═══════════ 渲染 ═══════════
-function renderAll() { applyTransform(); drawPaper(); renderInk(); renderTexts(); renderThumbs(); $("#btnBookmarkPage").textContent = curPage().bookmark ? "★" : "☆"; }
+function renderAll() { applyTransform(); drawPaper(); renderInk(); renderTexts(); renderThumbs(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
 function drawPaper() { pctx.clearRect(0, 0, PAGE_W, PAGE_H); paintTemplate(pctx, curPage()); }
 function renderInk() { ictx.clearRect(0, 0, PAGE_W, PAGE_H); for (const s of curPage().strokes) strokePath(ictx, s); }
 function renderThumbs() {
@@ -605,14 +648,15 @@ async function addPage(opts = {}) {
   save(); renderAll(); if (!opts.silent) toast("已新增页面");
   return curPage();
 }
-function deletePage(i) {
+async function deletePage(i) {
   if (nb.pages.length <= 1) return;
-  if (!confirm(`删除第 ${i + 1} 页？`)) return;
+  const ok = await modalConfirm({ title: "删除页面", desc: `删除第 ${i + 1} 页？`, okText: "删除", danger: true });
+  if (!ok) return;
   bgCache.delete(nb.pages[i].id); nb.pages.splice(i, 1);
   if (pageIdx >= nb.pages.length) pageIdx = nb.pages.length - 1;
   save(); renderAll();
 }
-function renameCurrent() { const t = prompt("笔记本名称：", nb.title); if (t && t.trim()) { nb.title = t.trim(); $("#nbTitle").textContent = nb.title; save(); } }
+async function renameCurrent() { const t = await modalInput({ title: "重命名", value: nb.title, placeholder: "笔记本名称" }); if (t && t.trim()) { nb.title = t.trim(); $("#nbTitle").textContent = nb.title; save(); } }
 
 // ═══════════ undo / redo ═══════════
 function snapshot() { return JSON.parse(JSON.stringify(curPage().strokes)); }
@@ -703,7 +747,7 @@ async function importPdf() {
     }
     nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
     await saveNow(); gotoPage(0); toast(`已导入 PDF（${pdf.numPages} 页）`);
-  } catch (err) { console.error(err); alert("PDF 导入失败：" + err.message); } finally { busy(false); }
+  } catch (err) { console.error(err); modalAlert({ title: "PDF 导入失败", desc: err.message }); } finally { busy(false); }
 }
 
 // ═══════════ .xopp（Xournal++） ═══════════
@@ -759,11 +803,126 @@ async function importXopp() {
     }
     nb.pages = pages; nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
     bgCache.clear(); await saveNow(); gotoPage(0); toast(`已导入 .xopp（${pages.length} 页）`);
-  } catch (err) { console.error(err); alert(".xopp 导入失败：" + err.message); } finally { busy(false); }
+  } catch (err) { console.error(err); modalAlert({ title: ".xopp 导入失败", desc: err.message }); } finally { busy(false); }
 }
 
 // ═══════════ toast ═══════════
 let toastTimer;
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 1300); }
+
+// ═══════════ iOS 风模态框 / 菜单（替换原生 prompt/confirm/alert） ═══════════
+let _modalCleanup = null;
+function _closeModal() {
+  const mask = $("#modalMask");
+  mask.classList.add("hidden");
+  if (_modalCleanup) { document.removeEventListener("keydown", _modalCleanup); _modalCleanup = null; }
+}
+// 输入型：resolve(字符串) 或 resolve(null) 取消
+function modalInput({ title, desc = "", value = "", placeholder = "", okText = "确定", danger = false } = {}) {
+  return new Promise((resolve) => {
+    const mask = $("#modalMask");
+    $("#modalTitle").textContent = title || "";
+    $("#modalDesc").textContent = desc || "";
+    const inp = $("#modalInput");
+    inp.classList.remove("hidden"); inp.value = value; inp.placeholder = placeholder;
+    $("#modalSwatches").classList.add("hidden");
+    const ok = $("#modalOk"), cancel = $("#modalCancel");
+    ok.textContent = okText; ok.classList.toggle("danger", !!danger);
+    cancel.classList.remove("hidden");
+    mask.classList.remove("hidden");
+    setTimeout(() => { inp.focus(); inp.select(); }, 30);
+    const done = (v) => { _closeModal(); resolve(v); };
+    ok.onclick = () => done(inp.value);
+    cancel.onclick = () => done(null);
+    mask.onclick = (e) => { if (e.target === mask) done(null); };
+    _modalCleanup = (e) => { if (e.key === "Enter") { e.preventDefault(); done(inp.value); } else if (e.key === "Escape") { e.preventDefault(); done(null); } };
+    document.addEventListener("keydown", _modalCleanup);
+  });
+}
+// 确认型：resolve(true/false)
+function modalConfirm({ title, desc = "", okText = "确定", danger = false } = {}) {
+  return new Promise((resolve) => {
+    const mask = $("#modalMask");
+    $("#modalTitle").textContent = title || "";
+    $("#modalDesc").textContent = desc || "";
+    $("#modalInput").classList.add("hidden");
+    $("#modalSwatches").classList.add("hidden");
+    const ok = $("#modalOk"), cancel = $("#modalCancel");
+    ok.textContent = okText; ok.classList.toggle("danger", !!danger);
+    cancel.classList.remove("hidden");
+    mask.classList.remove("hidden");
+    const done = (v) => { _closeModal(); resolve(v); };
+    ok.onclick = () => done(true);
+    cancel.onclick = () => done(false);
+    mask.onclick = (e) => { if (e.target === mask) done(false); };
+    _modalCleanup = (e) => { if (e.key === "Enter") { e.preventDefault(); done(true); } else if (e.key === "Escape") { e.preventDefault(); done(false); } };
+    document.addEventListener("keydown", _modalCleanup);
+  });
+}
+// 仅提示型：resolve() 一个确定按钮
+function modalAlert({ title, desc = "" } = {}) {
+  return new Promise((resolve) => {
+    const mask = $("#modalMask");
+    $("#modalTitle").textContent = title || "";
+    $("#modalDesc").textContent = desc || "";
+    $("#modalInput").classList.add("hidden");
+    $("#modalSwatches").classList.add("hidden");
+    const ok = $("#modalOk"), cancel = $("#modalCancel");
+    ok.textContent = "好"; ok.classList.remove("danger");
+    cancel.classList.add("hidden");
+    mask.classList.remove("hidden");
+    const done = () => { _closeModal(); resolve(); };
+    ok.onclick = done;
+    mask.onclick = (e) => { if (e.target === mask) done(); };
+    _modalCleanup = (e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); done(); } };
+    document.addEventListener("keydown", _modalCleanup);
+  });
+}
+// 色块选择型：resolve(颜色值) 或 resolve(null)
+function modalSwatch({ title, desc = "", colors = [], current = "" } = {}) {
+  return new Promise((resolve) => {
+    const mask = $("#modalMask");
+    $("#modalTitle").textContent = title || "";
+    $("#modalDesc").textContent = desc || "";
+    $("#modalInput").classList.add("hidden");
+    const sw = $("#modalSwatches"); sw.classList.remove("hidden"); sw.innerHTML = "";
+    const done = (v) => { _closeModal(); resolve(v); };
+    colors.forEach((c) => {
+      const b = document.createElement("button");
+      b.className = "sw" + (c.toLowerCase() === (current || "").toLowerCase() ? " on" : "");
+      b.style.background = c;
+      b.onclick = () => done(c);
+      sw.appendChild(b);
+    });
+    const ok = $("#modalOk"), cancel = $("#modalCancel");
+    ok.classList.add("hidden"); cancel.classList.remove("hidden"); cancel.textContent = "取消";
+    mask.classList.remove("hidden");
+    cancel.onclick = () => { ok.classList.remove("hidden"); done(null); };
+    mask.onclick = (e) => { if (e.target === mask) { ok.classList.remove("hidden"); done(null); } };
+    _modalCleanup = (e) => { if (e.key === "Escape") { e.preventDefault(); ok.classList.remove("hidden"); done(null); } };
+    document.addEventListener("keydown", _modalCleanup);
+  });
+}
+// 浮出小菜单（笔记本 ⋯）：items=[{label,danger,onClick}]，anchor=触发元素
+function showCtxMenu(anchor, items) {
+  const menu = $("#ctxMenu");
+  menu.innerHTML = "";
+  items.forEach((it) => {
+    const row = document.createElement("button");
+    row.className = "ctx-item" + (it.danger ? " danger" : "");
+    row.textContent = it.label;
+    row.onclick = (e) => { e.stopPropagation(); hideCtxMenu(); it.onClick && it.onClick(); };
+    menu.appendChild(row);
+  });
+  menu.classList.remove("hidden");
+  const r = anchor.getBoundingClientRect();
+  const mw = menu.offsetWidth || 160, mh = menu.offsetHeight || 40;
+  let left = r.right - mw; if (left < 8) left = 8;
+  let top = r.bottom + 6; if (top + mh > window.innerHeight - 8) top = r.top - mh - 6;
+  menu.style.left = left + "px"; menu.style.top = top + "px";
+  setTimeout(() => document.addEventListener("click", hideCtxMenu, { once: true }), 0);
+}
+function hideCtxMenu() { $("#ctxMenu").classList.add("hidden"); }
+const COVER_PALETTE = ["#4c8dff", "#e2453b", "#1f9d55", "#f5a623", "#8e44ad", "#16b1c4", "#1c1c1e", "#ff7a59"];
 
 init();
