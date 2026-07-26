@@ -69,13 +69,36 @@ function showShelf() { $("#shelf").classList.remove("hidden"); $("#editor").clas
 function showEditor() { $("#shelf").classList.add("hidden"); $("#editor").classList.remove("hidden"); }
 
 // ═══════════ 书架 ═══════════
+let curFolder = null;   // 当前所在文件夹 id（null=根）
 function bindShelf() {
   $("#btnNewNotebook").addEventListener("click", newNotebook);
+  $("#btnNewFolder").addEventListener("click", newFolder);
+  $("#btnFolderBack").addEventListener("click", () => { curFolder = null; renderShelf(); });
 }
+function saveFolders() { return window.api.updateSettings({ folders }); }
 function renderShelf() {
   const grid = $("#shelfGrid");
-  grid.innerHTML = state.notebooks.map((n) => `
-    <div class="nb-card" data-id="${n.id}">
+  const inFolder = curFolder != null;
+  $("#btnFolderBack").classList.toggle("hidden", !inFolder);
+  $("#btnNewFolder").classList.toggle("hidden", inFolder);   // 不做嵌套文件夹
+  const f = inFolder ? folders.find((x) => x.id === curFolder) : null;
+  $("#shelfTitle").textContent = f ? f.name : "我的笔记";
+
+  const folderCards = inFolder ? "" : folders.map((fd) => {
+    const count = state.notebooks.filter((n) => n.folderId === fd.id).length;
+    return `<div class="folder-card" data-fid="${fd.id}">
+      <div class="folder-ico" style="--fc:${fd.color || "#4c8dff"}">
+        <svg viewBox="0 0 48 40"><path d="M2 8a4 4 0 0 1 4-4h11l5 5h20a4 4 0 0 1 4 4v23a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4z"/></svg>
+        <span class="folder-cnt">${count}</span>
+      </div>
+      <div class="nb-meta"><span class="nb-name">${escapeHtml(fd.name)}</span>
+        <button class="nb-menu" data-fmenu="${fd.id}">⋯</button></div>
+    </div>`;
+  }).join("");
+
+  const nbs = state.notebooks.filter((n) => (n.folderId || null) === curFolder);
+  const nbCards = nbs.map((n) => `
+    <div class="nb-card" data-id="${n.id}" draggable="true">
       <div class="nb-cover" style="background:${n.cover || "#4c8dff"}">
         <span class="spine"></span>
         <span class="glyph">✎</span>
@@ -86,17 +109,77 @@ function renderShelf() {
         <button class="nb-menu" data-menu="${n.id}">⋯</button>
       </div>
     </div>`).join("");
+
+  grid.innerHTML = folderCards + nbCards ||
+    `<div class="shelf-empty">这里还没有内容<br>点右上角新建笔记本${inFolder ? "" : "或文件夹"}</div>`;
+
   $$("#shelfGrid .nb-card").forEach((el) => {
     el.addEventListener("click", (e) => { if (e.target.dataset.menu != null) return; openNotebook(el.dataset.id); });
+    bindNbDrag(el);
   });
   $$("#shelfGrid .nb-menu").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); notebookMenu(el.dataset.menu, el); }));
+  $$("#shelfGrid .folder-card").forEach((el) => {
+    el.addEventListener("click", (e) => { if (e.target.dataset.fmenu != null) return; curFolder = el.dataset.fid; renderShelf(); });
+    bindFolderDrop(el);
+  });
+  $$("#shelfGrid [data-fmenu]").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); folderMenu(el.dataset.fmenu, el); }));
+}
+// 笔记本卡片拖拽（拖到文件夹上放入）
+let dragNbId = null;
+function bindNbDrag(el) {
+  el.addEventListener("dragstart", (e) => { dragNbId = el.dataset.id; el.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
+  el.addEventListener("dragend", () => { dragNbId = null; el.classList.remove("dragging"); $$(".folder-card").forEach((x) => x.classList.remove("drop-hot")); });
+}
+function bindFolderDrop(el) {
+  el.addEventListener("dragover", (e) => { if (dragNbId) { e.preventDefault(); el.classList.add("drop-hot"); } });
+  el.addEventListener("dragleave", () => el.classList.remove("drop-hot"));
+  el.addEventListener("drop", async (e) => {
+    e.preventDefault(); el.classList.remove("drop-hot");
+    if (!dragNbId) return;
+    const n = state.notebooks.find((x) => x.id === dragNbId);
+    if (n) { n.folderId = el.dataset.fid; await window.api.saveNotebooks(state.notebooks); renderShelf(); toast("已移入文件夹"); }
+  });
+}
+async function newFolder() {
+  const name = await modalInput({ title: "新建文件夹", value: "新文件夹", placeholder: "文件夹名称" });
+  if (name === null) return;
+  const color = COVER_PALETTE[folders.length % COVER_PALETTE.length];
+  folders.push({ id: await uid(), name: name.trim() || "新文件夹", color });
+  await saveFolders(); renderShelf();
+}
+function folderMenu(id, anchor) {
+  const fd = folders.find((x) => x.id === id); if (!fd) return;
+  showCtxMenu(anchor, [
+    { label: "打开", onClick: () => { curFolder = id; renderShelf(); } },
+    { label: "重命名", onClick: async () => {
+        const t = await modalInput({ title: "重命名文件夹", value: fd.name, placeholder: "文件夹名称" });
+        if (t && t.trim()) { fd.name = t.trim(); await saveFolders(); renderShelf(); }
+      } },
+    { label: "改颜色", onClick: async () => {
+        const c = await modalSwatch({ title: "文件夹颜色", colors: COVER_PALETTE, current: fd.color, custom: true });
+        if (c) { fd.color = c; await saveFolders(); renderShelf(); }
+      } },
+    { label: "删除文件夹", danger: true, onClick: async () => {
+        const inside = state.notebooks.filter((n) => n.folderId === id).length;
+        const ok = await modalConfirm({ title: "删除文件夹", desc: inside ? `「${fd.name}」内的 ${inside} 本笔记将移回主书架。` : `删除「${fd.name}」？`, okText: "删除", danger: true });
+        if (!ok) return;
+        state.notebooks.forEach((n) => { if (n.folderId === id) n.folderId = null; });
+        folders = folders.filter((x) => x.id !== id);
+        await saveFolders(); await window.api.saveNotebooks(state.notebooks); renderShelf();
+      } },
+  ]);
+}
+async function moveNotebookToFolder(n) {
+  if (n.folderId) { n.folderId = null; await window.api.saveNotebooks(state.notebooks); renderShelf(); toast("已移出文件夹"); return; }
+  const pick = await modalList({ title: "移动到文件夹", items: folders.map((f) => ({ id: f.id, label: f.name, color: f.color })) });
+  if (!pick) return;
+  n.folderId = pick; await window.api.saveNotebooks(state.notebooks); renderShelf(); toast("已移动");
 }
 async function newNotebook() {
   const title = await modalInput({ title: "新建笔记本", desc: "给你的笔记本起个名字", value: "新笔记本", placeholder: "笔记本名称" });
   if (title === null) return;
-  const palette = ["#4c8dff", "#e2453b", "#1f9d55", "#f5a623", "#8e44ad", "#16b1c4"];
-  const cover = palette[state.notebooks.length % palette.length];
-  const n = { id: await uid(), title: title.trim() || "新笔记本", cover, createdAt: Date.now(),
+  const cover = COVER_PALETTE[state.notebooks.length % COVER_PALETTE.length];
+  const n = { id: await uid(), title: title.trim() || "新笔记本", cover, createdAt: Date.now(), folderId: curFolder,
     pages: [{ id: await uid(), template: "lined", bg: null, bookmark: null, strokes: [], texts: [] }] };
   state.notebooks.push(n);
   await window.api.saveNotebooks(state.notebooks);
@@ -106,12 +189,14 @@ async function newNotebook() {
 function notebookMenu(id, anchor) {
   const n = state.notebooks.find((x) => x.id === id);
   if (!n) return;
+  const moveItems = folders.length ? [{ label: n.folderId ? "移出文件夹" : "移动到文件夹…", onClick: () => moveNotebookToFolder(n) }] : [];
   showCtxMenu(anchor, [
     { label: "打开", onClick: () => openNotebook(id) },
     { label: "重命名", onClick: async () => {
         const t = await modalInput({ title: "重命名笔记本", value: n.title, placeholder: "笔记本名称" });
         if (t && t.trim()) { n.title = t.trim(); await window.api.saveNotebooks(state.notebooks); renderShelf(); }
       } },
+    ...moveItems,
     { label: "换封面", onClick: async () => {
         const c = await modalSwatch({ title: "选择封面颜色", desc: "点色块或用＋自定义任意颜色", colors: COVER_PALETTE, current: n.cover, custom: true });
         if (c) { n.cover = c; await window.api.saveNotebooks(state.notebooks); renderShelf(); }
@@ -1190,6 +1275,31 @@ function modalSwatch({ title, desc = "", colors = [], current = "", custom = fal
       wrap.appendChild(plus);
       sw.appendChild(wrap);
     }
+    const ok = $("#modalOk"), cancel = $("#modalCancel");
+    ok.classList.add("hidden"); cancel.classList.remove("hidden"); cancel.textContent = "取消";
+    mask.classList.remove("hidden");
+    cancel.onclick = () => { ok.classList.remove("hidden"); done(null); };
+    mask.onclick = (e) => { if (e.target === mask) { ok.classList.remove("hidden"); done(null); } };
+    _modalCleanup = (e) => { if (e.key === "Escape") { e.preventDefault(); ok.classList.remove("hidden"); done(null); } };
+    document.addEventListener("keydown", _modalCleanup);
+  });
+}
+// 列表选择型：items=[{id,label,color}] resolve(id) 或 null
+function modalList({ title, desc = "", items = [] } = {}) {
+  return new Promise((resolve) => {
+    const mask = $("#modalMask");
+    $("#modalTitle").textContent = title || "";
+    $("#modalDesc").textContent = desc || "";
+    $("#modalInput").classList.add("hidden");
+    const sw = $("#modalSwatches"); sw.classList.remove("hidden"); sw.innerHTML = ""; sw.classList.add("as-list");
+    const done = (v) => { sw.classList.remove("as-list"); _closeModal(); resolve(v); };
+    items.forEach((it) => {
+      const b = document.createElement("button");
+      b.className = "list-row";
+      b.innerHTML = `<span class="list-dot" style="background:${it.color || "#4c8dff"}"></span>${escapeHtml(it.label)}`;
+      b.onclick = () => done(it.id);
+      sw.appendChild(b);
+    });
     const ok = $("#modalOk"), cancel = $("#modalCancel");
     ok.classList.add("hidden"); cancel.classList.remove("hidden"); cancel.textContent = "取消";
     mask.classList.remove("hidden");

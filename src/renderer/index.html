@@ -11,11 +11,20 @@
 <!-- ═══════════ 书架（Library） ═══════════ -->
 <section id="shelf" class="screen">
   <header class="shelf-bar">
-    <span class="shelf-title">我的笔记</span>
-    <button id="btnNewNotebook" class="pill-btn">
-      <svg viewBox="0 0 24 24" class="i16"><path d="M12 5v14M5 12h14"/></svg>
-      新建笔记本
-    </button>
+    <div class="shelf-head-left">
+      <button id="btnFolderBack" class="ic hidden" title="返回上级"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <span class="shelf-title" id="shelfTitle">我的笔记</span>
+    </div>
+    <div class="shelf-actions">
+      <button id="btnNewFolder" class="pill-btn ghost">
+        <svg viewBox="0 0 24 24" class="i16"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v4M10 13h4"/></svg>
+        新建文件夹
+      </button>
+      <button id="btnNewNotebook" class="pill-btn">
+        <svg viewBox="0 0 24 24" class="i16"><path d="M12 5v14M5 12h14"/></svg>
+        新建笔记本
+      </button>
+    </div>
   </header>
   <div id="shelfGrid" class="shelf-grid"></div>
 </section>
