@@ -151,12 +151,12 @@ svg.i16 { width: 16px; height: 16px; }
 #canvasWrap { position: relative; background: var(--paper); box-shadow: 0 10px 44px rgba(0,0,0,.18); }
 #canvasWrap canvas { position: absolute; top: 0; left: 0; display: block; touch-action: none; }
 /* ★ BUG1 修复：只有 #ink 接收绘制事件；paper/overlay 均 pointer-events:none */
-#paper   { z-index: 1; pointer-events: none; }
-#ink     { z-index: 2; }
-#overlay { z-index: 3; pointer-events: none; }
-#textLayer { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
-#coverLayer { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
-#cardLayer { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+#paper   { z-index: 0; pointer-events: none; }
+#ink     { z-index: 3; }
+#overlay { z-index: 5; pointer-events: none; }
+#textLayer { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+#coverLayer { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
+#cardLayer { position: absolute; inset: 0; z-index: 8; pointer-events: none; }
 
 /* 挖空笔遮挡块：合上=不透明色块盖住；打开=半透明露出内容 */
 .cover-box { position: absolute; pointer-events: auto; cursor: pointer; border-radius: 6px;
@@ -461,6 +461,88 @@ svg.i16 { width: 16px; height: 16px; }
 #canvasWrap.turning #paper, #canvasWrap.turning #ink, #canvasWrap.turning #textLayer { animation: page-fade .26s ease; }
 @keyframes page-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+/* ═══════════ 笔盒可自定义工具区 ═══════════ */
+.dock-tools { display: flex; align-items: center; gap: 10px; }
+.dock-tools:empty { display: none; }
+
+/* 更多面板：区块标题右侧链接按钮 */
+.pop-label-row { display: flex; align-items: center; justify-content: space-between; }
+.pop-link { border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer; padding: 2px 4px; border-radius: 6px; }
+.pop-link:hover { background: rgba(0,122,255,.1); }
+
+/* 截图笔：底部预览托盘 */
+.shot-tray {
+  position: absolute; bottom: 82px; left: 50%; transform: translateX(-50%); z-index: 41;
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; max-width: 92vw; overflow-x: auto;
+  background: rgba(255,255,255,.92); backdrop-filter: blur(12px);
+  border-radius: 16px; box-shadow: var(--shadow-pop);
+}
+.shot-item { position: relative; flex-shrink: 0; cursor: pointer; border-radius: 8px; overflow: visible;
+  transition: transform .12s; }
+.shot-item:hover { transform: translateY(-2px); }
+.shot-item img { display: block; height: 66px; max-width: 120px; object-fit: cover;
+  border-radius: 8px; border: 1px solid var(--line); background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.14); }
+.shot-del { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; border-radius: 50%;
+  background: #1c1c1e; color: #fff; border: 2px solid #fff; cursor: pointer; font-size: 11px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; padding: 0; }
+.shot-del:hover { background: #000; }
+.shot-tray:not(.hidden) { animation: pop-in .22s cubic-bezier(.34,1.4,.5,1); }
+
+/* 图片对象层（截图/导入图片） */
+#imageLayer { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+#imageLayer.interactive .img-obj { pointer-events: auto; }
+.img-obj { position: absolute; touch-action: none; }
+.img-obj img { width: 100%; height: 100%; display: block; -webkit-user-drag: none; }
+#imageLayer.interactive .img-obj { cursor: move; outline: 1.5px solid rgba(0,122,255,.5); outline-offset: 2px; }
+.img-obj.moving { opacity: .85; }
+.img-obj .img-del, .img-obj .img-resize { display: none; }
+#imageLayer.interactive .img-obj .img-del {
+  display: flex; position: absolute; top: -11px; right: -11px; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--danger); color: #fff; border: 2px solid #fff; cursor: pointer; font-size: 11px; line-height: 1;
+  align-items: center; justify-content: center; padding: 0; }
+#imageLayer.interactive .img-obj .img-resize {
+  display: block; position: absolute; right: -8px; bottom: -8px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--accent); cursor: nwse-resize; }
+
+/* ═══════════ 自定义笔盒编辑 / 批量编辑笔 ═══════════ */
+.dock-editor-card, .pme-card { width: 420px; max-width: 94vw; }
+.de-body, .pme-body { padding: 16px 18px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; max-height: 80vh; }
+.de-hint { font-size: 12px; color: var(--dim); line-height: 1.6; }
+.de-list { display: flex; flex-direction: column; gap: 6px; }
+.de-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #F7F7F8; border-radius: 12px;
+  cursor: grab; transition: .12s; }
+.de-row.dragging { opacity: .4; }
+.de-row.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.de-grip { color: var(--dim); cursor: grab; font-size: 15px; }
+.de-ico { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; color: var(--text); }
+.de-ico svg { width: 22px; height: 22px; }
+.de-name { flex: 1; font-size: 14px; color: var(--text); }
+.de-row.on .de-name { font-weight: 600; }
+/* iOS 开关 */
+.de-toggle { width: 44px; height: 26px; border-radius: 13px; background: #E5E5EA; border: none; position: relative;
+  cursor: pointer; padding: 0; transition: background .18s; flex-shrink: 0; }
+.de-toggle.on { background: #34c759; }
+.de-knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .18s; }
+.de-toggle.on .de-knob { transform: translateX(18px); }
+
+/* 批量编辑：笔选择网格 */
+.pme-pens { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; min-height: 56px;
+  padding: 10px; background: #F7F7F8; border-radius: 12px; }
+.pme-pen { position: relative; width: 30px; height: 54px; border: none; background: none; cursor: pointer; padding: 0;
+  align-self: flex-end; opacity: .5; transition: .14s; }
+.pme-pen svg { width: 28px; height: 54px; display: block; }
+.pme-pen.sel { opacity: 1; transform: translateY(-6px); }
+.pme-tick { position: absolute; top: -6px; left: 50%; transform: translateX(-50%); width: 16px; height: 16px;
+  border-radius: 50%; background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; text-align: center;
+  display: none; }
+.pme-pen.sel .pme-tick { display: block; }
+.pme-controls { display: flex; flex-direction: column; gap: 12px; }
+.pme-controls #pmeColor { width: 30px; height: 30px; border: none; background: none; padding: 0; border-radius: 8px; cursor: pointer; }
+.pme-controls #pmeSize { flex: 1; accent-color: var(--accent); }
+.pme-controls #pmeSizeVal { width: 22px; text-align: center; color: var(--dim); }
 
 /* 我的笔：新增按钮 */
 .pen-add { width: 34px; height: 46px; border: 1.5px dashed var(--line, #E5E5EA); background: none; border-radius: 8px; color: var(--dim, #8E8E93); font-size: 22px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }

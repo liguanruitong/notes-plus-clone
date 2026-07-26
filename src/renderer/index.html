@@ -80,6 +80,7 @@
       <canvas id="ink"></canvas>
       <canvas id="overlay"></canvas>
       <div id="textLayer"></div>
+      <div id="imageLayer"></div>
       <div id="coverLayer"></div>
       <div id="cardLayer"></div>
     </div>
@@ -99,20 +100,25 @@
     <span class="dk-sep"></span>
     <div id="penRack" class="pen-rack"></div>
     <span class="dk-sep"></span>
-    <button class="dk tool" data-tool="eraser" id="tEraser" title="橡皮擦"><svg viewBox="0 0 24 24"><path d="M8 20l-4-4a2 2 0 0 1 0-2.8l8-8a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8L14 20z"/><path d="M8 20h11"/></svg></button>
-    <button class="dk tool" data-tool="lasso" id="tLasso" title="套索选择"><svg viewBox="0 0 24 24"><path d="M4 11c0-4 4-6 8-6s8 2 8 6-4 6-8 6c-1.5 0-2.8-.3-4-.7" stroke-dasharray="3 2.5"/><path d="M7 16c-1 .8-1 2.2 0 3"/></svg></button>
-    <button class="dk tool" data-tool="insert" id="tInsert" title="插入图片"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-6 6"/></svg></button>
+    <div id="dockTools" class="dock-tools"></div>
     <button class="dk more" id="btnMore" title="更多工具"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="6" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18" cy="12" r="1.7"/></svg></button>
   </div>
+
+  <!-- 截图笔：底部预览窗托盘（一排小缩略图） -->
+  <div id="shotTray" class="shot-tray hidden"></div>
 
   <!-- 「更多」弹层：工具九宫格 / 我的笔 / 纸张模板 -->
   <div id="morePanel" class="popover hidden">
     <div class="pop-sec">
-      <div class="pop-label">工具</div>
+      <div class="pop-label pop-label-row"><span>工具</span>
+        <button id="btnEditDock" class="pop-link">自定义笔盒</button>
+      </div>
       <div id="toolGrid" class="tool-grid"></div>
     </div>
     <div class="pop-sec">
-      <div class="pop-label">我的笔</div>
+      <div class="pop-label pop-label-row"><span>我的笔</span>
+        <button id="btnMultiEdit" class="pop-link">批量编辑</button>
+      </div>
       <div id="myPens" class="my-pens"></div>
     </div>
     <div id="penEdit" class="pen-edit hidden">
@@ -230,6 +236,59 @@
             <button id="teClearG" class="mini-btn danger">清空</button>
           </div>
           <div id="teGuideList" class="te-guide-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 自定义笔盒（编辑工具盘） ═══════════ -->
+<div id="dockEditor" class="tpl-editor hidden">
+  <div class="te-card dock-editor-card">
+    <div class="te-head">
+      <button id="deCancel" class="te-x">取消</button>
+      <span class="te-title">自定义笔盒</span>
+      <button id="deSave" class="te-save">完成</button>
+    </div>
+    <div class="de-body">
+      <div class="de-hint">勾选要放进底部笔盒的工具，拖动 ☰ 调整顺序。未勾选的仍可在「更多」里使用。</div>
+      <div id="deList" class="de-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 批量编辑笔 ═══════════ -->
+<div id="penMultiEditor" class="tpl-editor hidden">
+  <div class="te-card pme-card">
+    <div class="te-head">
+      <button id="pmeDone" class="te-x">关闭</button>
+      <span class="te-title">批量编辑笔</span>
+      <button id="pmeApply" class="te-save">应用到选中</button>
+    </div>
+    <div class="pme-body">
+      <div class="de-hint">点笔可多选（再点取消）。下方设置会统一应用到所有选中的笔；也可连续单独调整。</div>
+      <div id="pmePens" class="pme-pens"></div>
+      <div class="pme-controls">
+        <div class="pop-row">
+          <span class="mini">类型</span>
+          <div id="pmeKind" class="pen-kind">
+            <button class="kind" data-kind="pen">笔</button>
+            <button class="kind" data-kind="highlighter">荧光笔</button>
+            <button class="kind" data-kind="keep">保持</button>
+          </div>
+        </div>
+        <div class="pop-row">
+          <input type="color" id="pmeColor" value="#1c1c1e">
+          <div id="pmePalette" class="palette"></div>
+        </div>
+        <div class="pop-row">
+          <span class="mini">粗细</span>
+          <input type="range" id="pmeSize" min="1" max="24" value="3">
+          <span id="pmeSizeVal">3</span>
+        </div>
+        <div class="pop-row">
+          <button id="pmeSelAll" class="mini-btn">全选</button>
+          <button id="pmeDel" class="mini-btn danger">删除选中</button>
         </div>
       </div>
     </div>
