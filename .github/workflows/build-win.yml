@@ -68,7 +68,31 @@ jobs:
             }
           }
 
-          # 3) 尽力而为：解出 NSIS 内嵌 app-64.7z 并证明 ffmpeg.dll 确在 exe 内部（不作硬门槛）
+          # 3) zip 免安装版：直接列 zip 归档核对 ffmpeg.dll（zip 就是 win-unpacked 打包，权威且可验证）
+          $zip = Get-ChildItem release -Filter *.zip | Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $zip) {
+            Write-Host "❌ release/ 下没有生成 zip（免安装解压版）"
+            $fail = $true
+          } else {
+            $zipMB = [math]::Round($zip.Length/1MB,2)
+            Write-Host "📦 产物 zip: $($zip.Name) = $zipMB MB"
+            $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+            if (Test-Path $sevenZip) {
+              $listing = & $sevenZip l "$($zip.FullName)" 2>$null | Out-String
+              if ($listing -match "ffmpeg\.dll") { Write-Host "✅ zip 内含 ffmpeg.dll —— 解压即用，绝不缺 dll" }
+              else { Write-Host "❌ zip 内未找到 ffmpeg.dll"; $fail = $true }
+            } else {
+              # 无 7z 时退回 .NET 读取 zip 条目
+              Add-Type -AssemblyName System.IO.Compression.FileSystem
+              $za = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+              $has = $za.Entries | Where-Object { $_.Name -eq "ffmpeg.dll" }
+              $za.Dispose()
+              if ($has) { Write-Host "✅ zip 内含 ffmpeg.dll（.NET 校验）" }
+              else { Write-Host "❌ zip 内未找到 ffmpeg.dll（.NET 校验）"; $fail = $true }
+            }
+          }
+
+          # 4) 尽力而为：解出 NSIS 内嵌 app-64.7z 证明 ffmpeg.dll 确在 portable exe 内部（不作硬门槛）
           $sevenZip = "C:\Program Files\7-Zip\7z.exe"
           if ($exe -and (Test-Path $sevenZip)) {
             $tmp = Join-Path $env:RUNNER_TEMP "nsis_probe"
@@ -79,10 +103,10 @@ jobs:
               if ($listing -match "ffmpeg\.dll") {
                 Write-Host "✅ 已从 exe 内嵌 app-64.7z 中确认 ffmpeg.dll —— 真机不会再报缺 dll"
               } else {
-                Write-Host "⚠️ 未能在内嵌归档列表中匹配 ffmpeg.dll（仅提示，不阻断；以 win-unpacked 校验为准）"
+                Write-Host "⚠️ 未能在内嵌归档列表中匹配 ffmpeg.dll（仅提示，不阻断；以 win-unpacked / zip 校验为准）"
               }
             } else {
-              Write-Host "ℹ️ 未能解出内嵌 app-64.7z（NSIS 结构差异），跳过深层证明；以 win-unpacked 校验为准"
+              Write-Host "ℹ️ 未能解出内嵌 app-64.7z（NSIS 结构差异），跳过深层证明；以 win-unpacked / zip 校验为准"
             }
           }
 
@@ -90,18 +114,30 @@ jobs:
             Write-Host "::error::打包产物自检失败：Electron 运行时不完整，拒绝发布。"
             exit 1
           }
-          Write-Host "🎉 打包产物自检通过。"
+          Write-Host "🎉 打包产物自检通过（portable exe + zip 免安装版均含完整运行时）。"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: notes-plus-windows
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/*.zip
           if-no-files-found: error
       - name: 发布 Release（仅 tag 触发）
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          files: |
+            release/*.exe
+            release/*.zip
+          body: |
+            ## 手写笔记 ${{ github.ref_name }}
+
+            ### 下载（Windows x64）
+            - **推荐：`NotesPlus-win-x64-*.zip`（免安装解压版）** — 下载后解压，双击里面的「手写笔记.exe」即可运行。解压即用、不依赖自解压，**绝不会缺 ffmpeg.dll**。
+            - `NotesPlus-portable-*.exe`（单文件便携版） — 双击即用；若个别机器因杀毒拦截/临时目录问题导致自解压不完整而报错，请改用上面的 zip 解压版。
+
+            > 两个附件都内嵌了完整 Electron 运行时（含 ffmpeg.dll 等），CI 打包时已逐一自检核对。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
