@@ -845,22 +845,43 @@ function widthAt(s, p) {
 }
 // 单条 stroke 画到 context —— 折线消除：以相邻采样点中点作 quadraticCurveTo 的终点、
 // 原采样点作控制点，曲线自然穿过所有原始采样点。不修改/不丢弃/不平均任何采样点坐标。
+// ⚠️ 半透明笔（荧光笔）必须整条路径【一次性描边】：若逐段分别 stroke，相邻段在重叠处
+// 会叠加多层半透明 → 出现一个个圆圈/结节、浓度不均。整条一次描边则半透明只叠一层，浓度均匀自然。
 function strokePath(ctx, s) {
   const pts = s.points; if (!pts.length) return;
   ctx.lineJoin = "round"; ctx.lineCap = "round";
-  ctx.globalAlpha = strokeAlpha(s); ctx.strokeStyle = s.color;
+  const alpha = strokeAlpha(s);
+  ctx.globalAlpha = alpha; ctx.strokeStyle = s.color;
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   if (pts.length === 1) {
     ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, widthAt(s, pts[0].p ?? 0.5) / 2, 0, Math.PI * 2);
     ctx.fillStyle = s.color; ctx.fill(); ctx.globalAlpha = 1; return;
   }
+  // 半透明笔（荧光笔）：恒定线宽 + 整条路径一次性 stroke，浓度均匀无结节。
+  if (alpha < 0.999) {
+    // 线宽取整条平均压感（半透明笔通常粗细均匀，避免逐段变宽产生台阶）
+    let pSum = 0; for (const p of pts) pSum += (p.p ?? 0.5);
+    ctx.lineWidth = widthAt(s, pSum / pts.length);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    if (pts.length === 2) {
+      ctx.lineTo(pts[1].x, pts[1].y);
+    } else {
+      for (let i = 1; i < pts.length - 1; i++) {
+        const cm = mid(pts[i], pts[i + 1]);
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, cm.x, cm.y);
+      }
+      ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1; return;
+  }
+  // 不透明笔：逐段二次贝塞尔，每段用相邻两点平均压感设线宽，保留压感粗细变化。
   if (pts.length === 2) {
     ctx.beginPath(); ctx.lineWidth = widthAt(s, ((pts[0].p ?? 0.5) + (pts[1].p ?? 0.5)) / 2);
     ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); ctx.stroke();
     ctx.globalAlpha = 1; return;
   }
-  // 逐段二次贝塞尔：从上一个中点画到当前中点，控制点为当前采样点 → 圆滑穿过原始点。
-  // 每段用相邻两点平均压感设线宽，保留压感粗细变化。
-  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   let prevMid = pts[0];
   for (let i = 1; i < pts.length; i++) {
     const curMid = i < pts.length - 1 ? mid(pts[i], pts[i + 1]) : pts[pts.length - 1];
