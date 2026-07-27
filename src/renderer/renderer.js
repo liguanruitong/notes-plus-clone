@@ -510,9 +510,13 @@ function penSVG(p) {
 }
 function penButton(p, i, on) {
   const hl = p.kind === "highlighter" ? "hl" : "";
-  const label = `${PEN_KINDS[p.kind] || "笔"} · ${p.size}px`;
-  return `<button class="pen ${on ? "on" : ""} ${hl}" data-i="${i}" title="${label}">${penSVG(p)}</button>`;
+  const hkTxt = p.hotkey ? `（快捷键 ${hkLabel(p.hotkey)}）` : "";
+  const label = `${PEN_KINDS[p.kind] || "笔"} · ${p.size}px${hkTxt}`;
+  const badge = p.hotkey ? `<span class="pen-hk">${hkLabel(p.hotkey)}</span>` : "";
+  return `<button class="pen ${on ? "on" : ""} ${hl}" data-i="${i}" title="${label}">${penSVG(p)}${badge}</button>`;
 }
+// 快捷键显示文案：单字符大写，空格特殊显示
+function hkLabel(k) { return k === " " ? "空格" : (k && k.length === 1 ? k.toUpperCase() : k); }
 function buildPens() {
   const drawingActive = !["eraser", "lasso", "text", "shape", "pan", "shot", "cover", "laser"].includes(tool);
   $("#penRack").innerHTML = pens.map((p, i) => penButton(p, i, i === activePen && drawingActive)).join("");
@@ -524,10 +528,12 @@ function renderMyPens() {
   const box = $("#myPens"); if (!box) return;
   box.innerHTML = pens.map((p, i) => penButton(p, i, i === activePen)).join("")
     + `<button id="btnAddPen" class="pen-add" title="新增笔">＋</button>`;
-  $$("#myPens .pen").forEach((el) => el.addEventListener("click", () => { usePen(+el.dataset.i); openPenEdit(); }));
-  const add = $("#myPens .pen-add"); if (add) add.addEventListener("click", addPen);
+  // ★ 面板内点笔＝选中并直接编辑该笔；stopPropagation 防止 usePen→buildPens 重建 DOM 后
+  //    document 关闭监听把当前面板误关（旧元素被替换，contains 判定失效导致误关）。
+  $$("#myPens .pen").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); usePen(+el.dataset.i); openPenEdit(); }));
+  const add = $("#myPens .pen-add"); if (add) add.addEventListener("click", (e) => { e.stopPropagation(); addPen(); openPenEdit(); });
 }
-function openPenEdit() { const pe = $("#penEdit"); if (pe) pe.classList.remove("hidden"); syncPenFxUI(); }
+function openPenEdit() { const pe = $("#penEdit"); if (pe) pe.classList.remove("hidden"); syncPenFxUI(); syncHotkeyUI(); }
 // ═══════════ 统一工具注册表（更多面板九宫格 / 可自定义笔盒 共用） ═══════════
 // kind: "select"=切换成绘制/交互工具（会高亮）；"action"=一次性动作（插图/加卡片/打开小工具）
 const TOOL_REGISTRY = [
@@ -611,8 +617,57 @@ function addPen() {
 }
 function editPen() {
   if (!pens[activePen]) return;
-  pens[activePen] = penFromCurrent();
+  const hk = pens[activePen].hotkey;                 // 保存不改动已绑定的快捷键
+  pens[activePen] = penFromCurrent(); if (hk) pens[activePen].hotkey = hk;
   tool = pens[activePen].tool; buildPens(); window.api.updateSettings({ pens }); toast("已更新此笔");
+}
+
+// ═══════════ 快捷键绑定 ═══════════
+let hkCapturing = false;   // 是否处于"请按一个键"捕获态
+function syncHotkeyUI() {
+  const btn = $("#penHotkeyBtn"), clr = $("#penHotkeyClear"); if (!btn) return;
+  const p = pens[activePen]; const hk = p && p.hotkey;
+  hkCapturing = false; btn.classList.remove("capturing");
+  btn.textContent = hk ? hkLabel(hk) : "未设置";
+  btn.classList.toggle("bound", !!hk);
+  if (clr) clr.style.visibility = hk ? "visible" : "hidden";
+}
+function startHotkeyCapture() {
+  if (!pens[activePen]) return;
+  hkCapturing = true;
+  const btn = $("#penHotkeyBtn");
+  btn.classList.add("capturing"); btn.classList.remove("bound"); btn.textContent = "请按一个键…";
+}
+// 把某键绑给当前笔：单键唯一，冲突则解绑旧笔并轻提示
+function setPenHotkey(key) {
+  const p = pens[activePen]; if (!p) return;
+  const prev = pens.find((q, i) => i !== activePen && q.hotkey === key);
+  if (prev) { prev.hotkey = ""; toast(`快捷键 ${hkLabel(key)} 已从其它笔改绑到此笔`); }
+  else toast(`已绑定快捷键 ${hkLabel(key)}`);
+  p.hotkey = key;
+  window.api.updateSettings({ pens }); buildPens(); syncHotkeyUI(); renderHotkeyList();
+}
+function clearPenHotkey() {
+  const p = pens[activePen]; if (!p || !p.hotkey) { syncHotkeyUI(); return; }
+  p.hotkey = ""; window.api.updateSettings({ pens }); buildPens(); syncHotkeyUI(); renderHotkeyList(); toast("已清除快捷键");
+}
+// 快捷键一览：先列自定义笔绑定，再列默认工具键（用户未占用时仍生效）
+const DEFAULT_HOTKEYS = [
+  { k: "P", desc: "画笔" }, { k: "H", desc: "荧光笔" }, { k: "E", desc: "橡皮" },
+  { k: "V", desc: "套索" }, { k: "T", desc: "文字" }, { k: "1-9", desc: "第 N 支笔" },
+];
+function renderHotkeyList() {
+  const box = $("#hotkeyList"); if (!box) return;
+  const custom = pens.map((p, i) => ({ p, i })).filter((x) => x.p.hotkey);
+  const rows = custom.map((x) => `<div class="hk-line"><span class="hk-key">${hkLabel(x.p.hotkey)}</span><span class="hk-desc">${PEN_KINDS[x.p.kind] || "笔"} · ${x.p.color} · ${x.p.size}px</span></div>`);
+  const used = new Set(custom.map((x) => x.p.hotkey));
+  for (const d of DEFAULT_HOTKEYS) {
+    const dim = d.k.length === 1 && used.has(d.k.toLowerCase()) ? " unset" : "";
+    rows.push(`<div class="hk-line"><span class="hk-key${dim}">${d.k}</span><span class="hk-desc">默认 · ${d.desc}${dim ? "（已被自定义占用）" : ""}</span></div>`);
+  }
+  rows.push(`<div class="hk-line"><span class="hk-key">⌘/Ctrl Z·Y</span><span class="hk-desc">撤销 / 重做</span></div>`);
+  rows.push(`<div class="hk-line"><span class="hk-key">Del</span><span class="hk-desc">删除选中</span></div>`);
+  box.innerHTML = rows.join("");
 }
 function syncPenKindUI() {
   $$("#penKind .kind").forEach((el) => el.classList.toggle("on", el.dataset.kind === penKind));
@@ -664,6 +719,15 @@ function bindMorePanel() {
   $("#btnEditPen").addEventListener("click", editPen);
   $("#btnDelPen").addEventListener("click", delPen);
   $("#btnNewTpl").addEventListener("click", openTemplateEditor);
+  // 快捷键绑定：点按钮进入捕获态，点 ✕ 清除，「快捷键一览」展开/收起
+  $("#penHotkeyBtn").addEventListener("click", (e) => { e.stopPropagation(); hkCapturing ? syncHotkeyUI() : startHotkeyCapture(); });
+  $("#penHotkeyClear").addEventListener("click", (e) => { e.stopPropagation(); clearPenHotkey(); });
+  on("#btnHotkeyList", "click", (e) => {
+    e.stopPropagation(); const box = $("#hotkeyList");
+    const show = box.classList.contains("hidden"); box.classList.toggle("hidden", !show);
+    $("#btnHotkeyList").textContent = show ? "收起" : "展开";
+    if (show) renderHotkeyList();
+  });
   // 笔类型切换
   $$("#penKind .kind").forEach((el) => el.addEventListener("click", () => {
     penKind = el.dataset.kind;
@@ -681,7 +745,7 @@ function bindMorePanel() {
     window.api.updateSettings({ eraserSize });
   });
   document.addEventListener("click", (e) => {
-    if (!$("#morePanel").contains(e.target) && e.target.id !== "btnMore") $("#morePanel").classList.add("hidden");
+    if (!$("#morePanel").contains(e.target) && e.target.id !== "btnMore") { $("#morePanel").classList.add("hidden"); hkCapturing = false; }
   });
 }
 function selectTool(t) {
@@ -1742,25 +1806,48 @@ function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); cur
 
 function bindKeys() {
   window.addEventListener("keydown", (e) => {
+    // 快捷键捕获态：吞掉下一个可见单键作为当前笔的绑定（Esc 取消）
+    if (hkCapturing) {
+      e.preventDefault();
+      if (e.key === "Escape") { syncHotkeyUI(); return; }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { setPenHotkey(e.key.toLowerCase()); }
+      return;
+    }
     if ($("#editor").classList.contains("hidden")) return;
-    const editing = e.target.classList?.contains("text-box") || e.target.tagName === "INPUT";
+    const editing = e.target.classList?.contains("text-box") || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA";
+    // Esc：统一关闭当前打开的弹层/面板（即便在输入框内也允许）
+    if (e.key === "Escape") { if (closeTopLayer()) { e.preventDefault(); return; } }
     if (editing) return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
     if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); deleteSelection(); return; }
     // 方向键滚动画布
     const step = e.shiftKey ? 400 : 120;
-    if (e.key === "ArrowLeft") { e.preventDefault(); stage.scrollLeft -= step; }
-    else if (e.key === "ArrowRight") { e.preventDefault(); stage.scrollLeft += step; }
-    else if (e.key === "ArrowUp") { e.preventDefault(); stage.scrollTop -= step; }
-    else if (e.key === "ArrowDown") { e.preventDefault(); stage.scrollTop += step; }
-    else if (e.key === "p") usePenTool("pen");
-    else if (e.key === "h") usePenTool("highlighter");
-    else if (e.key === "e") selectTool("eraser");
-    else if (e.key === "v") selectTool("lasso");
-    else if (e.key === "t") selectTool("text");
-    else if (/^[1-9]$/.test(e.key) && pens[+e.key - 1]) usePen(+e.key - 1);
+    if (e.key === "ArrowLeft") { e.preventDefault(); stage.scrollLeft -= step; return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); stage.scrollLeft += step; return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); stage.scrollTop -= step; return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); stage.scrollTop += step; return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // ① 用户自定义快捷键优先：命中某支笔的 hotkey 即切到该笔
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const hi = pens.findIndex((p) => p.hotkey && p.hotkey === k);
+    if (hi >= 0) { usePen(hi); return; }
+    // ② 默认绑定（用户未用该键自定义时才生效，向后兼容）
+    if (isHotkeyFree("p") && e.key === "p") usePenTool("pen");
+    else if (isHotkeyFree("h") && e.key === "h") usePenTool("highlighter");
+    else if (isHotkeyFree("e") && e.key === "e") selectTool("eraser");
+    else if (isHotkeyFree("v") && e.key === "v") selectTool("lasso");
+    else if (isHotkeyFree("t") && e.key === "t") selectTool("text");
+    else if (/^[1-9]$/.test(e.key) && isHotkeyFree(e.key) && pens[+e.key - 1]) usePen(+e.key - 1);
   });
+}
+// 该键是否未被任何笔自定义占用（默认绑定仅在空闲时生效）
+function isHotkeyFree(k) { return !pens.some((p) => p.hotkey === k); }
+// Esc 关闭最上层弹层，返回是否关掉了某个层
+function closeTopLayer() {
+  const layers = ["#penMultiEditor", "#dockEditor", "#tplEditor", "#calcPanel", "#timerPanel", "#morePanel", "#sidebar"];
+  for (const s of layers) { const el = $(s); if (el && !el.classList.contains("hidden")) { el.classList.add("hidden"); hkCapturing = false; return true; } }
+  return false;
 }
 function usePenTool(t) { tool = t; selectTool(t); }
 
@@ -2145,7 +2232,9 @@ window.__np_strokes = () => curPage().strokes.map((s) => s.points.length);
 window.__np_tool = () => tool;
 window.__np_activePage = () => pageIdx;
 window.__np_pageGap = () => pageGap;
-window.__np_pens = () => pens.map((p) => ({ kind: p.kind, color: p.color, size: p.size }));
+window.__np_pens = () => pens.map((p) => ({ kind: p.kind, color: p.color, size: p.size, hotkey: p.hotkey || "" }));
+window.__np_activePen = () => activePen;
+window.__np_setHotkey = (i, k) => { if (pens[i]) { pens[i].hotkey = k; buildPens(); } };
 window.__np_selInfo = () => {
   if (!sel) return null;
   let x0 = Infinity, y0 = Infinity;
@@ -2183,6 +2272,19 @@ window.__np_smoothProbe = () => {
   const s = { tool: "pen", color: "#000", size: 3, points: [ {x:0,y:0,p:.5},{x:10,y:20,p:.5},{x:30,y:5,p:.5},{x:50,y:40,p:.5},{x:70,y:0,p:.5} ] };
   strokePath(rec, s);
   return { usedQuadratic: calls.includes("quadraticCurveTo"), usedLineTo: calls.includes("lineTo"), calls };
+};
+// 荧光笔（半透明）渲染探针：对多采样点的半透明 highlighter stroke，strokePath 应只调用一次 stroke()
+window.__np_hlStrokeProbe = () => {
+  let strokeCount = 0, beginCount = 0;
+  const rec = new Proxy({}, { get: (_t, k) => {
+    if (["lineJoin","lineCap","strokeStyle","fillStyle","globalAlpha","lineWidth"].includes(k)) return undefined;
+    return (...a) => { if (k === "stroke") strokeCount++; if (k === "beginPath") beginCount++; };
+  }, set: () => true });
+  // opacity=0.35 半透明 + 8 个采样点
+  const s = { tool: "highlighter", kind: "highlighter", color: "#ffd60a", size: 16, opacity: 0.35,
+    points: Array.from({length:8}, (_,i)=>({x:i*20, y:(i%2)*30, p:.5})) };
+  strokePath(rec, s);
+  return { strokeCount, beginCount, alpha: strokeAlpha(s) };
 };
 
 init();

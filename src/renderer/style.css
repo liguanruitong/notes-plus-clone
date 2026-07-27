@@ -261,6 +261,10 @@ svg.i16 { width: 16px; height: 16px; }
 .pen:hover { transform: translateY(-4px); }
 .pen.on { transform: translateY(-14px); }   /* ★ 选中笔明显上抬 */
 .pen.on svg { filter: drop-shadow(0 5px 5px rgba(0,0,0,.25)); }
+/* 笔上的快捷键角标 */
+.pen .pen-hk { position: absolute; top: -3px; right: -5px; min-width: 14px; height: 14px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center; background: var(--accent); color: #fff;
+  border-radius: 7px; font-size: 9px; font-weight: 700; line-height: 1; box-shadow: 0 1px 2px rgba(0,0,0,.25); pointer-events: none; }
 
 /* ═══════════ 「更多」弹层 ═══════════ */
 .popover {
@@ -298,6 +302,27 @@ svg.i16 { width: 16px; height: 16px; }
 .add-pen:hover { border-color: var(--accent); color: var(--accent); }
 
 .pen-edit { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: #F7F7F8; border-radius: 12px; }
+/* 我的笔上方轻提示 */
+.pen-edit-hint { font-size: 11px; color: var(--dim); margin: -2px 0 2px; }
+/* 快捷键绑定行 */
+.hotkey-row { justify-content: flex-start; }
+.hk-btn { flex: 1; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px;
+  font: inherit; font-size: 13px; color: var(--text); cursor: pointer; text-align: left; transition: .12s; }
+.hk-btn:hover { border-color: var(--accent); }
+.hk-btn.capturing { border-color: var(--accent); color: var(--accent); background: rgba(0,122,255,.08);
+  animation: hkPulse 1s ease-in-out infinite; }
+.hk-btn.bound { font-weight: 700; color: var(--accent); }
+@keyframes hkPulse { 50% { opacity: .55; } }
+.hk-clear { width: 30px; height: 30px; flex: none; border: none; background: rgba(0,0,0,.05); border-radius: 8px;
+  color: var(--dim); cursor: pointer; font-size: 13px; line-height: 1; }
+.hk-clear:hover { background: rgba(255,59,48,.12); color: var(--danger); }
+/* 快捷键一览 */
+.hotkey-list { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; background: #F7F7F8; border-radius: 10px; }
+.hotkey-list .hk-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+.hotkey-list .hk-key { min-width: 22px; height: 22px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center;
+  background: #fff; border: 1px solid var(--line); border-radius: 6px; font-weight: 700; font-size: 12px; color: var(--text); }
+.hotkey-list .hk-key.unset { color: var(--dim); font-weight: 400; border-style: dashed; }
+.hotkey-list .hk-desc { color: var(--dim); }
 .pen-kind { display: flex; gap: 4px; flex-wrap: wrap; }
 .pen-kind .kind { flex: 1; min-width: 52px; padding: 6px 4px; border: 1px solid var(--line); background: #fff;
   border-radius: 8px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; transition: .12s; }

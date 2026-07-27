@@ -122,7 +122,12 @@
       <div class="pop-label pop-label-row"><span>我的笔</span>
         <button id="btnMultiEdit" class="pop-link">批量编辑</button>
       </div>
+      <div class="pen-edit-hint">点一支笔即可选中并在下方编辑它</div>
       <div id="myPens" class="my-pens"></div>
+      <div class="pop-label pop-label-row" style="margin-top:10px"><span>快捷键一览</span>
+        <button id="btnHotkeyList" class="pop-link">展开</button>
+      </div>
+      <div id="hotkeyList" class="hotkey-list hidden"></div>
     </div>
     <div id="penEdit" class="pen-edit hidden">
       <div id="penKind" class="pen-kind">
@@ -165,6 +170,12 @@
           <input type="range" id="pAlphaAmt" min="0" max="100" value="50">
           <span id="pAlphaAmtVal">50%</span>
         </div>
+      </div>
+      <!-- 快捷键绑定：点击进入捕获态，按任意单键绑定；✕ 清除 -->
+      <div class="pop-row hotkey-row">
+        <span class="mini">快捷键</span>
+        <button id="penHotkeyBtn" class="hk-btn">未设置</button>
+        <button id="penHotkeyClear" class="hk-clear" title="清除快捷键">✕</button>
       </div>
       <div class="pop-row">
         <button id="btnEditPen" class="mini-btn">保存</button>
