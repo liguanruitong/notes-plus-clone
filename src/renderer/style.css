@@ -5,7 +5,8 @@
   --line: #E5E5EA;        /* 分隔线 */
   --text: #1C1C1E;        /* 主文字 */
   --dim: #8E8E93;         /* 次要文字 */
-  --accent: #007AFF;      /* iOS 蓝 */
+  --theme-color: #007AFF; /* 用户可自选的主题强调色 */
+  --accent: var(--theme-color);  /* iOS 蓝，全局强调色跟随主题色 */
   --danger: #FF3B30;      /* iOS 红 */
   --paper: #ffffff;
   --shadow-card: 0 4px 20px rgba(0,0,0,.12);
@@ -547,6 +548,46 @@ svg.i16 { width: 16px; height: 16px; }
 .pme-controls #pmeColor { width: 30px; height: 30px; border: none; background: none; padding: 0; border-radius: 8px; cursor: pointer; }
 .pme-controls #pmeSize { flex: 1; accent-color: var(--accent); }
 .pme-controls #pmeSizeVal { width: 22px; text-align: center; color: var(--dim); }
+
+/* ═══════════ 笔触透明度 / 压感响应 ═══════════ */
+.fx-block { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: #fff; border-radius: 10px; }
+.fx-head { display: flex; align-items: center; justify-content: space-between; }
+#opacityVal, #pWidthAmtVal, #pAlphaAmtVal { width: 40px; text-align: right; color: var(--dim); font-size: 12px; }
+#opacityRange, #pWidthAmt, #pAlphaAmt { flex: 1; accent-color: var(--accent); }
+.fx-strength.fx-off { opacity: .38; pointer-events: none; }
+/* iOS 原生风开关 */
+.np-toggle { width: 44px; height: 26px; border-radius: 13px; background: #E5E5EA; border: none; position: relative;
+  cursor: pointer; padding: 0; transition: background .18s; flex-shrink: 0; }
+.np-toggle.on { background: var(--accent); }
+.np-knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .18s; }
+.np-toggle.on .np-knob { transform: translateX(18px); }
+
+/* ═══════════ 主题色选择 ═══════════ */
+.theme-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.theme-swatches { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1; }
+.theme-sw { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid transparent;
+  box-shadow: 0 1px 3px rgba(0,0,0,.16); transition: transform .1s; }
+.theme-sw:hover { transform: scale(1.1); }
+.theme-sw.on { border-color: #fff; box-shadow: 0 0 0 2px var(--text), 0 1px 3px rgba(0,0,0,.2); }
+.theme-custom { position: relative; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: conic-gradient(#ff2d55, #ffcc00, #34c759, #007aff, #af52de, #ff2d55); }
+.theme-custom input[type=color] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.theme-plus { color: #fff; font-size: 15px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.4); pointer-events: none; }
+
+/* ═══════════ 扩展纸张尺寸 ═══════════ */
+.pe-card { width: 380px; max-width: 94vw; }
+.pe-body { padding: 16px 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.pe-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pe-field { display: flex; flex-direction: column; gap: 6px; }
+.pe-field > span { font-size: 13px; font-weight: 600; color: var(--text); }
+.pe-field input[type=number] { border: 1px solid #D1D1D6; border-radius: 8px; padding: 9px 10px; font: inherit;
+  outline: none; -moz-appearance: textfield; }
+.pe-field input[type=number]:focus { border-color: var(--accent); }
+.pe-quick { display: flex; gap: 8px; flex-wrap: wrap; }
+.pe-size { font-size: 12px; color: var(--dim); text-align: center; }
+.pe-size em { color: var(--accent); font-style: normal; font-weight: 600; }
 
 /* 我的笔：新增按钮 */
 .pen-add { width: 34px; height: 46px; border: 1.5px dashed var(--line, #E5E5EA); background: none; border-radius: 8px; color: var(--dim, #8E8E93); font-size: 22px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }

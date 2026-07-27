@@ -138,6 +138,34 @@
         <input type="range" id="sizeRange" min="1" max="24" value="3">
         <span id="sizeVal">3</span>
       </div>
+      <!-- 粗细压感响应 -->
+      <div class="fx-block">
+        <div class="fx-head"><span class="mini">粗细 · 压感响应</span>
+          <button class="np-toggle" id="pWidthToggle" aria-label="粗细响应压感"><span class="np-knob"></span></button>
+        </div>
+        <div class="pop-row fx-strength" id="pWidthStrengthRow">
+          <span class="mini">强度</span>
+          <input type="range" id="pWidthAmt" min="0" max="100" value="50">
+          <span id="pWidthAmtVal">50%</span>
+        </div>
+      </div>
+      <!-- 透明度基础值 -->
+      <div class="pop-row">
+        <span class="mini">透明度</span>
+        <input type="range" id="opacityRange" min="0" max="100" value="100">
+        <span id="opacityVal">100%</span>
+      </div>
+      <!-- 透明度压感响应 -->
+      <div class="fx-block">
+        <div class="fx-head"><span class="mini">透明度 · 压感响应</span>
+          <button class="np-toggle" id="pAlphaToggle" aria-label="透明度响应压感"><span class="np-knob"></span></button>
+        </div>
+        <div class="pop-row fx-strength" id="pAlphaStrengthRow">
+          <span class="mini">强度</span>
+          <input type="range" id="pAlphaAmt" min="0" max="100" value="50">
+          <span id="pAlphaAmtVal">50%</span>
+        </div>
+      </div>
       <div class="pop-row">
         <button id="btnEditPen" class="mini-btn">保存</button>
         <button id="btnDelPen" class="mini-btn danger">删除此笔</button>
@@ -174,6 +202,20 @@
       <div class="pop-label">纸张模板</div>
       <div id="tplGrid" class="tpl-grid"></div>
       <button id="btnNewTpl" class="mini-btn wide">＋ 自定义模板</button>
+    </div>
+    <div class="pop-sec">
+      <div class="pop-label">纸张尺寸</div>
+      <button id="btnExpandPaper" class="mini-btn wide">⇲ 扩展纸张尺寸…</button>
+    </div>
+    <div class="pop-sec">
+      <div class="pop-label">主题色</div>
+      <div class="theme-row">
+        <div id="themeSwatches" class="theme-swatches"></div>
+        <label class="theme-custom" title="自定义主题色">
+          <input type="color" id="themeCustom" value="#007AFF">
+          <span class="theme-plus">＋</span>
+        </label>
+      </div>
     </div>
   </div>
 
@@ -249,6 +291,32 @@
           <div id="teGuideList" class="te-guide-list"></div>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 扩展纸张尺寸 ═══════════ -->
+<div id="paperExpander" class="tpl-editor hidden">
+  <div class="te-card pe-card">
+    <div class="te-head">
+      <button id="peCancel" class="te-x">取消</button>
+      <span class="te-title">扩展纸张尺寸</span>
+      <button id="peApply" class="te-save">应用</button>
+    </div>
+    <div class="pe-body">
+      <div class="de-hint">向指定方向把当前页纸张向外扩大，已有笔迹保持原位不动。单位为像素（约 150dpi，1cm≈59px）。</div>
+      <div class="pe-grid">
+        <label class="pe-field"><span>向上 ↑</span><input type="number" id="peUp" min="0" max="4000" step="50" value="0"></label>
+        <label class="pe-field"><span>向下 ↓</span><input type="number" id="peDown" min="0" max="4000" step="50" value="0"></label>
+        <label class="pe-field"><span>向左 ←</span><input type="number" id="peLeft" min="0" max="4000" step="50" value="0"></label>
+        <label class="pe-field"><span>向右 →</span><input type="number" id="peRight" min="0" max="4000" step="50" value="0"></label>
+      </div>
+      <div class="pe-quick">
+        <button class="mini-btn" data-pe-quick="down">往下加长一页</button>
+        <button class="mini-btn" data-pe-quick="right">往右加宽半页</button>
+        <button class="mini-btn danger" data-pe-quick="reset">重置为 A4</button>
+      </div>
+      <div class="pe-size">当前尺寸：<em id="peSizeNow">1240 × 1754</em> → 扩展后：<em id="peSizeNew">1240 × 1754</em></div>
     </div>
   </div>
 </div>
