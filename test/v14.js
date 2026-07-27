@@ -36,6 +36,9 @@ module.exports = async (cdp) => {
     const first=document.querySelector('#shotTray .shot-item'); if(first) first.click();
     await new Promise(r=>setTimeout(r,200));
     const imgs1 = document.querySelectorAll('#imageLayer .img-obj').length;
+    // v1.5.0：插入后会自动切到套索工具（立即选中新图），再截一张前需重选截图笔
+    document.querySelector('#btnMore').click(); await new Promise(r=>setTimeout(r,80));
+    document.querySelector('#toolGrid .tool-cell[data-tool="shot"]').click(); await new Promise(r=>setTimeout(r,100));
     // 再截一张（连续）
     pe('pointerdown',sx,sy+20); pe('pointermove',ex,ey+20); pe('pointerup',ex,ey+20);
     await new Promise(r=>setTimeout(r,180));
@@ -97,16 +100,16 @@ module.exports = async (cdp) => {
     const open=!document.querySelector('#dockEditor').classList.contains('hidden');
     const rows=document.querySelectorAll('#deList .de-row').length;
     const dockBefore=document.querySelectorAll('#dockTools .tool').length;
-    // 找到“计算器”那行，打开开关（放进笔盒）
-    let toggled=false;
+    // 确保“计算器”开关处于开启（放进笔盒）——不论初始持久化状态如何都收敛到 on
+    let ensured=false;
     document.querySelectorAll('#deList .de-row').forEach(row=>{
-      if(row.querySelector('.de-name').textContent==='计算器'){ const t=row.querySelector('.de-toggle'); if(!t.classList.contains('on')){ t.click(); toggled=true; } }
+      if(row.querySelector('.de-name').textContent==='计算器'){ const t=row.querySelector('.de-toggle'); if(!t.classList.contains('on')){ t.click(); } ensured=true; }
     });
     await new Promise(r=>setTimeout(r,80));
     document.querySelector('#deSave').click(); await new Promise(r=>setTimeout(r,120));
     const dockAfter=document.querySelectorAll('#dockTools .tool').length;
     const hasCalc = !!document.querySelector('#dockTools .tool[data-tool="calc"]');
-    return JSON.stringify({open, rows, dockBefore, toggled, dockAfter, hasCalc});
+    return JSON.stringify({open, rows, ensured, dockBefore, dockAfter, hasCalc});
   })()`));
 
   console.log("V14 RESULTS:", JSON.stringify(R, null, 2));
@@ -114,7 +117,7 @@ module.exports = async (cdp) => {
     R.shot.trayShown && R.shot.count1===1 && R.shot.imgs1>=1 && R.shot.count2===2 && R.shot.count3===1 &&
     R.dup.grew && R.dup.selIsNew &&
     R.multi.open && R.multi.penCount>=2 && R.multi.selCount===R.multi.penCount && R.multi.allRed &&
-    R.dock.open && R.dock.rows>=10 && R.dock.hasCalc && R.dock.dockAfter>R.dock.dockBefore;
+    R.dock.open && R.dock.rows>=10 && R.dock.hasCalc && R.dock.ensured;
   console.log("V14_PASS=", pass);
   return pass;
 };

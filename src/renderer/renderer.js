@@ -11,12 +11,13 @@ let folders = [];       // 书架文件夹
 let nb = null;          // 当前打开的 notebook
 let pageIdx = 0;
 let tool = "pen", color = "#1a1a1a", size = 3;
-let zoom = 1, panX = 0, panY = 0;
+let zoom = 1;
 let pens = [], activePen = 0;
 let customTemplates = [];
 let eraserMode = "stroke", eraserSize = 18;   // stroke=整笔 / pixel=像素
 let dockTools = [];        // 笔盒自定义：[{t, on}]，顺序即显示顺序
 let shots = [];            // 截图笔：本次会话的截图预览 [{id, dataUrl, w, h}]
+let pageGap = 24;          // 竖向连续排列时页与页之间的间隔（逻辑 px；0=无间隔）
 const bgCache = new Map();
 
 const undoStack = [], redoStack = [];
@@ -24,6 +25,7 @@ const undoStack = [], redoStack = [];
 const paper = $("#paper"), ink = $("#ink"), overlay = $("#overlay");
 const pctx = paper.getContext("2d"), ictx = ink.getContext("2d"), octx = overlay.getContext("2d");
 const wrap = $("#canvasWrap"), stage = $("#stage"), textLayer = $("#textLayer");
+const pagesCol = $("#pagesColumn");
 
 const uid = () => window.api.newId();
 
@@ -34,6 +36,7 @@ async function init() {
   tool = s.lastTool || "pen"; color = s.lastColor || "#1a1a1a"; size = s.lastSize || 3;
   pens = s.pens || []; activePen = s.activePen || 0; customTemplates = s.customTemplates || [];
   eraserMode = s.eraserMode || "pixel"; eraserSize = s.eraserSize || 18;
+  pageGap = s.pageGap != null ? s.pageGap : 24;
   folders = s.folders || [];
   dockTools = normalizeDockTools(s.dockTools);
   // 迁移：只保留两种笔（笔 / 荧光笔）。检测到旧版多笔种预置则整体重置为新的两支
@@ -65,6 +68,7 @@ async function init() {
   bindDockEditor();
   bindPenMultiEditor();
   bindShotTray();
+  bindPageGap();
   buildToolGrid();
   buildDockTools();
   buildPalette();
@@ -231,28 +235,121 @@ async function openNotebook(id) {
   $("#colorCustom").value = color; $("#sizeRange").value = size; $("#sizeVal").textContent = size;
   showEditor();
   fitToStage();
+  buildPages();
   renderAll();
   renderTexts();
+  stage.scrollTop = 0;
 }
 
-// ═══════════ 缩放 / 变换 ═══════════
+// ═══════════ 竖向连续多页布局 / 缩放 ═══════════
+// 模型：每页一个静态预览槽 .page-slot；唯一可交互的 #canvasWrap 浮在「活动页」槽之上。
+// 滚动时活动页跟随视口中心切换，实现 GoodNotes 式竖向连续书写。
+function buildPages() {
+  if (!nb) return;
+  pagesCol.querySelectorAll(".page-slot").forEach((el) => el.remove());
+  const frag = document.createDocumentFragment();
+  nb.pages.forEach((_, i) => {
+    const slot = document.createElement("div");
+    slot.className = "page-slot"; slot.dataset.i = i;
+    const c = document.createElement("canvas");
+    c.className = "page-static"; c.width = PAGE_W; c.height = PAGE_H;
+    slot.appendChild(c);
+    slot.addEventListener("pointerdown", () => { if (+slot.dataset.i !== pageIdx) setActivePage(+slot.dataset.i); }, true);
+    frag.appendChild(slot);
+  });
+  pagesCol.appendChild(frag);
+  applyTransform();
+  nb.pages.forEach((_, i) => { if (i !== pageIdx) refreshPageStatic(i); });
+  positionLiveStack();
+}
+// 布局所有页槽 + 缩放活动页画布栈
 function applyTransform() {
+  const wCSS = PAGE_W * zoom, hCSS = PAGE_H * zoom, gapCSS = pageGap * zoom;
+  pagesCol.style.width = wCSS + "px";
+  pagesCol.querySelectorAll(".page-slot").forEach((slot, idx) => {
+    slot.style.width = wCSS + "px"; slot.style.height = hCSS + "px";
+    slot.style.marginTop = idx === 0 ? "0" : gapCSS + "px";
+    const c = slot.querySelector("canvas"); c.style.width = wCSS + "px"; c.style.height = hCSS + "px";
+  });
   wrap.style.width = PAGE_W + "px"; wrap.style.height = PAGE_H + "px";
-  wrap.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-  wrap.style.transformOrigin = "center center";
+  wrap.style.transform = `scale(${zoom})`; wrap.style.transformOrigin = "0 0";
   $("#zoomVal").textContent = Math.round(zoom * 100) + "%";
+  positionLiveStack();
   if (sel) drawSelection();
 }
+// 把可交互画布栈对齐到当前活动页槽
+function positionLiveStack() {
+  const slot = pagesCol.querySelector(`.page-slot[data-i="${pageIdx}"]`);
+  if (!slot) return;
+  wrap.style.top = slot.offsetTop + "px";
+  wrap.style.left = slot.offsetLeft + "px";
+}
+// 重绘某页的静态预览（活动页由实时画布栈覆盖，无需刷新）
+function refreshPageStatic(i) {
+  const slot = pagesCol.querySelector(`.page-slot[data-i="${i}"]`);
+  if (!slot) return;
+  const cx = slot.querySelector("canvas").getContext("2d");
+  cx.clearRect(0, 0, PAGE_W, PAGE_H);
+  cx.drawImage(flattenPage(i), 0, 0);
+  // 挖空块（合上态）在静态预览里画成实心色块
+  for (const cv of nb.pages[i].covers || []) { if (cv.open) continue; cx.fillStyle = cv.color || "#3c3c43"; roundRect(cx, cv.x, cv.y, cv.w, cv.h, 6); cx.fill(); }
+}
+function scrollToPage(i) {
+  const slot = pagesCol.querySelector(`.page-slot[data-i="${i}"]`);
+  if (slot) stage.scrollTop = slot.offsetTop - 20;
+}
+// 切换活动页（可编辑页）。prev 页转为静态预览。
+function setActivePage(i, opts = {}) {
+  if (i < 0 || i >= nb.pages.length) return;
+  if (i === pageIdx && !opts.force) return;
+  closeText(); clearSelection();
+  const prev = pageIdx; pageIdx = i;
+  if (prev !== i && nb.pages[prev]) refreshPageStatic(prev);
+  undoStack.length = 0; redoStack.length = 0;
+  buildTemplatePicker(); positionLiveStack(); renderAll();
+}
+// 滚动 → 视口中心页成为活动页（书写时不打断）
+let scrollRAF = 0;
+function onStageScroll() {
+  if (scrollRAF) return;
+  scrollRAF = requestAnimationFrame(() => {
+    scrollRAF = 0;
+    if (drawing || panning || lassoPts || selGesture) return;
+    const mid = stage.scrollTop + stage.clientHeight / 2;
+    let best = pageIdx, bestD = Infinity;
+    pagesCol.querySelectorAll(".page-slot").forEach((slot) => {
+      const c = slot.offsetTop + slot.offsetHeight / 2, d = Math.abs(c - mid);
+      if (d < bestD) { bestD = d; best = +slot.dataset.i; }
+    });
+    if (best !== pageIdx) setActivePage(best);
+  });
+}
 function fitToStage() {
-  const pad = 60;
-  zoom = Math.min((stage.clientWidth - pad) / PAGE_W, (stage.clientHeight - pad) / PAGE_H);
-  panX = 0; panY = 0; applyTransform();
+  const pad = 40;
+  zoom = Math.min((stage.clientWidth - pad) / PAGE_W, (stage.clientHeight - pad) / PAGE_H, 2);
+  applyTransform();
 }
 function setZoom(z) { zoom = Math.max(0.15, Math.min(6, z)); applyTransform(); }
+// 视口中心对应的活动页逻辑坐标（用于插图/加卡片时定位）
+function viewCenterLogical() {
+  const r = ink.getBoundingClientRect();
+  let x = (stage.getBoundingClientRect().left + stage.clientWidth / 2 - r.left) / zoom;
+  let y = (stage.getBoundingClientRect().top + stage.clientHeight / 2 - r.top) / zoom;
+  return { x: Math.max(20, Math.min(PAGE_W - 20, x)), y: Math.max(20, Math.min(PAGE_H - 20, y)) };
+}
 function toLogical(e) {
   const r = ink.getBoundingClientRect();
   return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom,
     p: e.pressure && e.pressure > 0 ? e.pressure : 0.5 };
+}
+function bindPageGap() {
+  $$("#pageGapSeg .seg-btn").forEach((el) => el.addEventListener("click", () => {
+    pageGap = +el.dataset.gap;
+    $$("#pageGapSeg .seg-btn").forEach((b) => b.classList.toggle("on", b === el));
+    window.api.updateSettings({ pageGap });
+    applyTransform(); scrollToPage(pageIdx);
+  }));
+  $$("#pageGapSeg .seg-btn").forEach((b) => b.classList.toggle("on", +b.dataset.gap === pageGap));
 }
 
 // ═══════════ 调色板 & 笔盘 ═══════════
@@ -467,7 +564,7 @@ function selectTool(t) {
   }
   textLayer.style.pointerEvents = t === "text" ? "auto" : "none";
   // 图片对象仅在套索工具下可选中/拖动/缩放，其余工具可在图片上正常书写
-  const il = $("#imageLayer"); if (il) il.classList.toggle("interactive", t === "lasso");
+  const il = $("#imageLayer"); if (il) { il.classList.toggle("interactive", t === "lasso"); if (t !== "lasso") $$("#imageLayer .img-obj.selected").forEach((el) => el.classList.remove("selected")); }
   ink.style.cursor = t === "pan" ? "grab" : t === "text" ? "text" : "crosshair";
   syncToolGrid();
   persistSettings();
@@ -523,16 +620,17 @@ function bindDrawing() {
   ink.addEventListener("pointerup", onUp);
   ink.addEventListener("pointercancel", onUp);
   ink.addEventListener("pointerleave", () => { if (drawing && tool !== "eraser") onUp(); });
+  // Ctrl+滚轮缩放（围绕光标）；普通滚轮由 #stage 原生竖向滚动翻页
   stage.addEventListener("wheel", (e) => {
     if (e.ctrlKey) { e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.1 : 0.9)); }
-    else { panX -= e.deltaX; panY -= e.deltaY; applyTransform(); }
   }, { passive: false });
+  stage.addEventListener("scroll", onStageScroll, { passive: true });
   bindTextLayer();
 }
 
 function onDown(e) {
   const pt = toLogical(e);
-  if (tool === "pan") { panning = true; panStart = { x: e.clientX - panX, y: e.clientY - panY }; ink.setPointerCapture(e.pointerId); return; }
+  if (tool === "pan") { panning = true; panStart = { x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop }; ink.setPointerCapture(e.pointerId); return; }
   if (tool === "text") return; // 文本层处理
   ink.setPointerCapture(e.pointerId);
   if (tool === "lasso") {
@@ -551,7 +649,7 @@ function onDown(e) {
 }
 function onMove(e) {
   const pt = toLogical(e);
-  if (panning) { panX = e.clientX - panStart.x; panY = e.clientY - panStart.y; applyTransform(); return; }
+  if (panning) { stage.scrollLeft = panStart.l - (e.clientX - panStart.x); stage.scrollTop = panStart.t - (e.clientY - panStart.y); return; }
   if (tool === "lasso") {
     if (selGesture) { updateSelGesture(pt); return; }
     if (lassoPts) { lassoPts.push(pt); drawLasso(); }
@@ -777,17 +875,24 @@ function renderShotTray() {
     if (del) del.addEventListener("click", (e) => { e.stopPropagation(); shots = shots.filter((x) => x.id !== del.dataset.sdel); renderShotTray(); });
   });
 }
-// 点预览：把截图作为可拖动图片贴到当前页中央
+// 点预览：把截图作为可拖动图片贴到当前页中央，并立刻选中（可直接拖动/缩放）
 async function insertShot(id) {
   const s = shots.find((x) => x.id === id); if (!s) return;
   const p = curPage(); p.images = p.images || [];
-  const cx = (-panX / zoom) + (stage.clientWidth / zoom) / 2, cy = (-panY / zoom) + (stage.clientHeight / zoom) / 2;
+  const { x: cx, y: cy } = viewCenterLogical();
   // 落地尺寸：不超过页面 70%
   let iw = s.w, ih = s.h; const maxW = PAGE_W * 0.7, maxH = PAGE_H * 0.7;
   const sc = Math.min(1, maxW / iw, maxH / ih); iw *= sc; ih *= sc;
   const img = { id: await uid(), dataUrl: s.dataUrl, x: Math.max(10, cx - iw / 2), y: Math.max(10, cy - ih / 2), w: iw, h: ih };
   p.images.push(img); save(); mountImage(img);
-  toast("已插入截图，用套索工具可拖动放置");
+  selectImage(img.id);
+  toast("已插入截图，可直接拖动/缩放放置");
+}
+// 立即选中某图片对象：切到套索工具（图片层变可交互，出现拖拽/缩放/删除手柄）并高亮
+function selectImage(id) {
+  if (tool !== "lasso") selectTool("lasso");   // 套索工具下图片层才可交互
+  const il = $("#imageLayer"); if (il) il.classList.add("interactive");
+  $$("#imageLayer .img-obj").forEach((el) => el.classList.toggle("selected", el.dataset.id === id));
 }
 function bindShotTray() { renderShotTray(); }
 
@@ -834,7 +939,7 @@ function mountImage(im) {
 const CARD_COLORS = ["#fff4c2", "#d8f0ff", "#ffe0e6", "#e2f7d8", "#ececf4"];
 async function addCard() {
   const p = curPage(); p.cards = p.cards || [];
-  const cx = (-panX / zoom) + (stage.clientWidth / zoom) / 2, cy = (-panY / zoom) + (stage.clientHeight / zoom) / 2;
+  const { x: cx, y: cy } = viewCenterLogical();
   const card = { id: await uid(), x: Math.max(20, cx - 110), y: Math.max(20, cy - 80), w: 220, h: 160,
     content: "", color: CARD_COLORS[p.cards.length % CARD_COLORS.length] };
   p.cards.push(card); save(); mountCard(card, true); toast("已添加卡片");
@@ -1404,13 +1509,14 @@ function bindThumbDrag(el, i) {
     e.preventDefault(); if (dragIdx === null || dragIdx === i) return;
     const [moved] = nb.pages.splice(dragIdx, 1); nb.pages.splice(i, 0, moved);
     const curId = curPage()?.id; pageIdx = nb.pages.findIndex((p) => p.id === curId);
-    dragIdx = null; save(); renderThumbs();
+    dragIdx = null; save(); buildPages(); renderAll(); renderThumbs();
   });
 }
+// 侧栏缩略图跳转：切换活动页并滚动定位
 function gotoPage(i) {
-  closeText(); clearSelection(); pageIdx = i;
-  undoStack.length = 0; redoStack.length = 0;
-  buildTemplatePicker(); renderAll();
+  setActivePage(i);
+  scrollToPage(i);
+  renderThumbs();
   wrap.classList.remove("turning"); void wrap.offsetWidth; wrap.classList.add("turning");
 }
 
@@ -1419,7 +1525,8 @@ async function addPage(opts = {}) {
   const id = await uid();
   nb.pages.splice(pageIdx + 1, 0, { id, template: opts.template || curPage().template, bg: opts.bg || null, bookmark: null, strokes: [], texts: [] });
   pageIdx += 1; undoStack.length = 0; redoStack.length = 0;
-  save(); renderAll(); if (!opts.silent) toast("已新增页面");
+  save(); buildPages(); renderAll(); scrollToPage(pageIdx);
+  if (!opts.silent) toast("已新增页面");
   return curPage();
 }
 async function deletePage(i) {
@@ -1428,7 +1535,7 @@ async function deletePage(i) {
   if (!ok) return;
   bgCache.delete(nb.pages[i].id); nb.pages.splice(i, 1);
   if (pageIdx >= nb.pages.length) pageIdx = nb.pages.length - 1;
-  save(); renderAll();
+  save(); buildPages(); renderAll();
 }
 async function renameCurrent() { const t = await modalInput({ title: "重命名", value: nb.title, placeholder: "笔记本名称" }); if (t && t.trim()) { nb.title = t.trim(); $("#nbTitle").textContent = nb.title; save(); } }
 
@@ -1446,12 +1553,12 @@ function bindKeys() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
     if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); deleteSelection(); return; }
-    // 方向键移动画布
-    const step = e.shiftKey ? 200 : 80;
-    if (e.key === "ArrowLeft") { e.preventDefault(); panX += step; applyTransform(); }
-    else if (e.key === "ArrowRight") { e.preventDefault(); panX -= step; applyTransform(); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); panY += step; applyTransform(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); panY -= step; applyTransform(); }
+    // 方向键滚动画布
+    const step = e.shiftKey ? 400 : 120;
+    if (e.key === "ArrowLeft") { e.preventDefault(); stage.scrollLeft -= step; }
+    else if (e.key === "ArrowRight") { e.preventDefault(); stage.scrollLeft += step; }
+    else if (e.key === "ArrowUp") { e.preventDefault(); stage.scrollTop -= step; }
+    else if (e.key === "ArrowDown") { e.preventDefault(); stage.scrollTop += step; }
     else if (e.key === "p") usePenTool("pen");
     else if (e.key === "h") usePenTool("highlighter");
     else if (e.key === "e") selectTool("eraser");
@@ -1534,7 +1641,7 @@ async function importPdf() {
       target.bg = dataUrl; target.template = "blank"; bgCache.delete(target.id);
     }
     nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
-    await saveNow(); gotoPage(0); toast(`已导入 PDF（${pdf.numPages} 页）`);
+    await saveNow(); buildPages(); gotoPage(0); toast(`已导入 PDF（${pdf.numPages} 页）`);
   } catch (err) { console.error(err); modalAlert({ title: "PDF 导入失败", desc: err.message }); } finally { busy(false); }
 }
 
@@ -1590,7 +1697,7 @@ async function importXopp() {
       pages.push({ id: await uid(), template, bg: null, bookmark: null, strokes, texts });
     }
     nb.pages = pages; nb.title = res.name || nb.title; $("#nbTitle").textContent = nb.title;
-    bgCache.clear(); await saveNow(); gotoPage(0); toast(`已导入 .xopp（${pages.length} 页）`);
+    bgCache.clear(); await saveNow(); buildPages(); gotoPage(0); toast(`已导入 .xopp（${pages.length} 页）`);
   } catch (err) { console.error(err); modalAlert({ title: ".xopp 导入失败", desc: err.message }); } finally { busy(false); }
 }
 
@@ -1836,6 +1943,8 @@ const COVER_PALETTE = [
 // ═══════════ 自测探针（仅供 CDP 测试用；无副作用） ═══════════
 window.__np_strokes = () => curPage().strokes.map((s) => s.points.length);
 window.__np_tool = () => tool;
+window.__np_activePage = () => pageIdx;
+window.__np_pageGap = () => pageGap;
 window.__np_pens = () => pens.map((p) => ({ kind: p.kind, color: p.color, size: p.size }));
 window.__np_selInfo = () => {
   if (!sel) return null;
