@@ -37,6 +37,7 @@
       <button id="btnBack" class="ic" title="返回书架"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
       <button id="btnPages" class="ic" title="页面"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M10 4v16"/></svg></button>
       <button id="btnBookmarks" class="ic" title="书签"><svg viewBox="0 0 24 24"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z"/></svg></button>
+      <button id="btnCards" class="ic" title="卡片"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></svg></button>
       <button id="btnLocate" class="ic" title="定位/适应屏幕"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
     </div>
     <div class="tb-title" id="nbTitle" title="点击重命名">笔记本</div>
@@ -74,6 +75,7 @@
     </div>
     <div id="pageList" class="page-list"></div>
     <div id="bookmarkList" class="bookmark-list hidden"></div>
+    <div id="cardIndexList" class="card-index-list hidden"></div>
   </aside>
 
   <!-- 画布：竖向连续滚动的多页列。每页一个静态预览槽（renderer.js 生成），
@@ -139,7 +141,8 @@
         <button class="kind" data-kind="highlighter">荧光笔</button>
       </div>
       <div class="pop-row">
-        <input type="color" id="colorCustom" value="#1c1c1e">
+        <label class="color-pick" title="自定义颜色（点击取色）"><input type="color" id="colorCustom" value="#1c1c1e"><span>🎨</span></label>
+        <input type="text" id="colorHex" class="hex-input" maxlength="7" spellcheck="false" placeholder="#1c1c1e" title="输入十六进制色值">
         <div id="palette" class="palette"></div>
       </div>
       <div class="pop-row">
@@ -372,7 +375,8 @@
           </div>
         </div>
         <div class="pop-row">
-          <input type="color" id="pmeColor" value="#1c1c1e">
+          <label class="color-pick" title="自定义颜色（点击取色）"><input type="color" id="pmeColor" value="#1c1c1e"><span>🎨</span></label>
+          <input type="text" id="pmeColorHex" class="hex-input" maxlength="7" spellcheck="false" placeholder="#1c1c1e" title="输入十六进制色值">
           <div id="pmePalette" class="palette"></div>
         </div>
         <div class="pop-row">

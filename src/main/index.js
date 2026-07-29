@@ -12,8 +12,8 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 800,
-    minHeight: 560,
+    minWidth: 360,
+    minHeight: 320,
     autoHideMenuBar: true,
     backgroundColor: "#20222a",
     title: "手写笔记",

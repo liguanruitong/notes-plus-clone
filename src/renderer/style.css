@@ -135,7 +135,8 @@ svg.i16 { width: 16px; height: 16px; }
 }
 .drawer-head { display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--text); font-weight: 600; }
-.page-list, .bookmark-list { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.page-list, .bookmark-list, .card-index-list { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.card-index-list { gap: 8px; }
 .page-thumb {
   background: var(--paper); border: 2px solid transparent; border-radius: 8px;
   aspect-ratio: 210/297; cursor: pointer; position: relative; overflow: hidden;
@@ -152,6 +153,16 @@ svg.i16 { width: 16px; height: 16px; }
 .bm-item { padding: 11px 13px; background: #F7F7F8; border-radius: 10px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
 .bm-item:hover { background: rgba(0,122,255,.1); }
 .bm-empty { color: var(--dim); text-align: center; padding: 20px; line-height: 1.8; }
+/* 卡片索引列表项 */
+.ci-item { display: flex; align-items: center; gap: 8px; padding: 9px 11px; background: #F7F7F8; border-radius: 10px; cursor: pointer; }
+.ci-item:hover { background: rgba(0,122,255,.1); }
+.ci-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+.ci-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text); }
+.ci-text.empty { color: var(--dim); font-style: italic; }
+.ci-page { flex-shrink: 0; font-size: 11px; color: var(--dim); }
+/* 卡片定位后短暂高亮 */
+.card-note.flash { animation: card-flash .9s ease; }
+@keyframes card-flash { 0%,100% { box-shadow: 0 4px 16px rgba(0,0,0,.18); } 30% { box-shadow: 0 0 0 3px var(--accent), 0 4px 16px rgba(0,0,0,.28); } }
 
 /* 画布：可交互的「活动页」栈，绝对定位浮在当前页槽之上 */
 #canvasWrap { position: absolute; top: 0; left: 0; z-index: 10; background: var(--paper); }
@@ -180,6 +191,9 @@ svg.i16 { width: 16px; height: 16px; }
 .card-del { border: none; background: none; cursor: pointer; color: rgba(0,0,0,.4); font-size: 12px; line-height: 1; padding: 2px 4px; }
 .card-del:hover { color: var(--danger); }
 .card-body { flex: 1; padding: 8px 10px; outline: none; overflow-y: auto; font-size: 15px; color: #333; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.card-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; opacity: .35;
+  background: linear-gradient(135deg, transparent 50%, rgba(0,0,0,.55) 50%); border-bottom-right-radius: 10px; }
+.card-resize:hover { opacity: .9; }
 
 /* ═══════════ 内嵌小工具（计算器 / 计时器） ═══════════ */
 .mini-app { position: fixed; z-index: 120; background: #fff; border-radius: 16px; box-shadow: var(--shadow-pop);
@@ -341,6 +355,17 @@ svg.i16 { width: 16px; height: 16px; }
 .sw { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
 .sw.on { border-color: var(--text); }
 #colorCustom { width: 30px; height: 30px; border: none; background: none; padding: 0; border-radius: 8px; cursor: pointer; }
+/* 明显的圆形取色按钮：色块由 input 本身显示，🎨 图标叠在其上 */
+.color-pick { position: relative; width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%;
+  overflow: hidden; cursor: pointer; box-shadow: 0 0 0 2px rgba(0,0,0,.12), inset 0 0 0 1px rgba(255,255,255,.5); }
+.color-pick input[type=color] { position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px); border: none; padding: 0; cursor: pointer; }
+.color-pick span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 14px; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.35); }
+/* 十六进制文本输入框 */
+.hex-input { width: 78px; flex-shrink: 0; background: rgba(0,0,0,.05); border: 1px solid transparent;
+  border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; color: var(--text); }
+.hex-input:focus { outline: none; border-color: var(--accent); background: #fff; }
+.hex-input.invalid { border-color: var(--danger); }
 #sizeRange { flex: 1; accent-color: var(--accent); }
 .mini { color: var(--dim); font-size: 12px; }
 #sizeVal { width: 22px; text-align: center; color: var(--dim); }

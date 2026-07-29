@@ -264,7 +264,8 @@ async function openNotebook(id) {
   $("#nbTitle").textContent = nb.title;
   buildPens(); buildTemplatePicker();
   selectTool(tool);
-  $("#colorCustom").value = color; $("#sizeRange").value = size; $("#sizeVal").textContent = size;
+  $("#colorCustom").value = color; { const hx = $("#colorHex"); if (hx) { hx.value = color; hx.classList.remove("invalid"); } }
+  $("#sizeRange").value = size; $("#sizeVal").textContent = size;
   showEditor();
   resizeActiveCanvases();
   fitToStage();
@@ -521,10 +522,20 @@ function buildPalette() {
   $("#palette").innerHTML = colors.map((c) => `<span class="sw ${c === color ? "on" : ""}" style="background:${c}" data-c="${c}"></span>`).join("");
   $$("#palette .sw").forEach((el) => el.addEventListener("click", () => setColor(el.dataset.c)));
 }
+// 规范化十六进制色值：允许省略 #，支持 #RGB / #RRGGBB；非法返回 null
+function normalizeHex(v) {
+  if (!v) return null;
+  let s = v.trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{3}$/.test(s)) s = s.split("").map((ch) => ch + ch).join("");
+  if (/^[0-9a-fA-F]{6}$/.test(s)) return "#" + s.toLowerCase();
+  return null;
+}
 function setColor(c) {
   color = c;
   $$("#palette .sw").forEach((el) => el.classList.toggle("on", el.dataset.c === c));
-  $("#colorCustom").value = c; persistSettings();
+  $("#colorCustom").value = c;
+  const hx = $("#colorHex"); if (hx) { hx.value = c; hx.classList.remove("invalid"); }
+  persistSettings();
 }
 function darken(hex, f = 0.7) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return hex;
@@ -825,6 +836,7 @@ function bindTopbar() {
   on("#btnBack", "click", () => { closeText(); showShelf(); });
   on("#btnPages", "click", () => toggleDrawer("pages"));
   on("#btnBookmarks", "click", () => toggleDrawer("bookmarks"));
+  on("#btnCards", "click", () => toggleDrawer("cards"));
   on("#btnBookmarkPage", "click", toggleBookmark);
   on("#btnAddPage", "click", () => addPage());
   on("#btnZoomFit", "click", fitToStage);
@@ -841,6 +853,12 @@ function bindDock() {
 }
 function bindMorePanel() {
   $("#colorCustom").addEventListener("input", (e) => setColor(e.target.value));
+  // 十六进制手动输入：合法则套用并同步取色器，非法标红不改色
+  $("#colorHex").addEventListener("input", (e) => {
+    const hx = normalizeHex(e.target.value);
+    if (hx) { e.target.classList.remove("invalid"); setColor(hx); }
+    else e.target.classList.add("invalid");
+  });
   $("#sizeRange").addEventListener("input", (e) => { size = +e.target.value; $("#sizeVal").textContent = size; persistSettings(); });
   // 透明度 + 压感响应控件（改动会实时体现在下一笔；点「保存」写入当前笔预设）
   $("#opacityRange").addEventListener("input", (e) => { penOpacity = +e.target.value / 100; $("#opacityVal").textContent = e.target.value + "%"; });
@@ -908,11 +926,48 @@ function toggleDrawer(mode) {
   const sb = $("#sidebar");
   if (!sb.classList.contains("hidden") && drawerMode === mode) { sb.classList.add("hidden"); return; }
   sb.classList.remove("hidden"); drawerMode = mode;
-  $("#drawerTitle").textContent = mode === "pages" ? "页面" : "书签";
+  $("#drawerTitle").textContent = mode === "pages" ? "页面" : mode === "bookmarks" ? "书签" : "卡片";
   $("#btnAddPage").classList.toggle("hidden", mode !== "pages");
   $("#pageList").classList.toggle("hidden", mode !== "pages");
   $("#bookmarkList").classList.toggle("hidden", mode !== "bookmarks");
-  if (mode === "pages") renderThumbs(); else renderBookmarks();
+  $("#cardIndexList").classList.toggle("hidden", mode !== "cards");
+  if (mode === "pages") renderThumbs();
+  else if (mode === "bookmarks") renderBookmarks();
+  else renderCardIndex();
+}
+// 全笔记卡片索引：遍历每页 cards，点击跳到该卡片所在页并居中定位。
+function renderCardIndex() {
+  const list = $("#cardIndexList");
+  const items = [];
+  nb.pages.forEach((p, pi) => (p.cards || []).forEach((c) => items.push({ c, pi })));
+  if (!items.length) { list.innerHTML = `<div class="bm-empty">还没有卡片<br>用工具栏「卡片」添加便签</div>`; return; }
+  list.innerHTML = items.map(({ c, pi }) => {
+    const txt = (c.content || "").trim();
+    const preview = txt ? escapeHtml(txt.slice(0, 24)) : "（空卡片）";
+    return `<div class="ci-item" data-page="${pi}" data-id="${c.id}">
+      <span class="ci-dot" style="background:${c.color || "#ececf4"}"></span>
+      <span class="ci-text${txt ? "" : " empty"}">${preview}</span>
+      <span class="ci-page">第${pi + 1}页</span></div>`;
+  }).join("");
+  $$("#cardIndexList .ci-item").forEach((el) =>
+    el.addEventListener("click", () => gotoCard(+el.dataset.page, el.dataset.id)));
+}
+// 跳到某卡片：切页 + 平移使卡片中心落在视口中心 + 短暂高亮
+function gotoCard(pi, id) {
+  setActivePage(pi);
+  const c = (nb.pages[pi].cards || []).find((x) => x.id === id);
+  if (c) {
+    // 卡片中心逻辑坐标 → pagesCol 局部像素，令其落在视口中心
+    const slot = pagesCol.querySelector(`.page-slot[data-i="${pi}"]`);
+    const ccx = (c.x + c.w / 2) * zoom, ccy = (c.y + c.h / 2) * zoom;
+    panX = stage.clientWidth / 2 - (slot.offsetLeft + ccx);
+    panY = stage.clientHeight / 2 - (slot.offsetTop + ccy);
+    applyTransform();
+  }
+  renderThumbs();
+  // 短暂高亮该卡片
+  const cardEl = $(`#cardLayer .card-note[data-id="${id}"]`);
+  if (cardEl) { cardEl.classList.remove("flash"); void cardEl.offsetWidth; cardEl.classList.add("flash"); }
 }
 async function toggleBookmark() {
   const p = curPage();
@@ -1340,8 +1395,10 @@ async function addCard() {
   const { x: cx, y: cy } = viewCenterLogical();
   const card = { id: await uid(), x: Math.max(20, cx - 110), y: Math.max(20, cy - 80), w: 220, h: 160,
     content: "", color: CARD_COLORS[p.cards.length % CARD_COLORS.length] };
-  p.cards.push(card); save(); mountCard(card, true); toast("已添加卡片");
+  p.cards.push(card); save(); mountCard(card, true); refreshCardIndex(); toast("已添加卡片");
 }
+// 卡片模式下同步刷新侧栏卡片列表
+function refreshCardIndex() { if (drawerMode === "cards" && !$("#sidebar").classList.contains("hidden")) renderCardIndex(); }
 function renderCards() {
   const layer = $("#cardLayer"); if (!layer) return;
   layer.innerHTML = "";
@@ -1353,12 +1410,13 @@ function mountCard(c, edit) {
   el.className = "card-note"; el.dataset.id = c.id;
   el.style.cssText = `left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px;background:${c.color}`;
   el.innerHTML = `<div class="card-bar"><button class="card-del" title="删除">✕</button></div>
-    <div class="card-body" contenteditable="true" spellcheck="false"></div>`;
+    <div class="card-body" contenteditable="true" spellcheck="false"></div>
+    <div class="card-resize" title="拖拽改变大小"></div>`;
   const body = el.querySelector(".card-body"); body.textContent = c.content;
   const bar = el.querySelector(".card-bar");
-  body.addEventListener("blur", () => { c.content = body.textContent; save(); });
+  body.addEventListener("blur", () => { c.content = body.textContent; save(); refreshCardIndex(); });
   el.querySelector(".card-del").addEventListener("click", () => {
-    curPage().cards = (curPage().cards || []).filter((x) => x.id !== c.id); el.remove(); save();
+    curPage().cards = (curPage().cards || []).filter((x) => x.id !== c.id); el.remove(); save(); refreshCardIndex();
   });
   // 拖动（抓标题栏）
   let dragging = false, start = null, origin = null;
@@ -1373,6 +1431,20 @@ function mountCard(c, edit) {
     el.style.left = c.x + "px"; el.style.top = c.y + "px";
   });
   bar.addEventListener("pointerup", () => { if (dragging) { dragging = false; save(); } });
+  // 右下角手柄拖拽改变尺寸（除以 zoom 与画布缩放对齐）
+  const rz = el.querySelector(".card-resize");
+  let sizing = false, rzStart = null, rzOrig = null;
+  rz.addEventListener("pointerdown", (e) => {
+    sizing = true; rzStart = { x: e.clientX, y: e.clientY }; rzOrig = { w: c.w, h: c.h };
+    rz.setPointerCapture(e.pointerId); e.preventDefault(); e.stopPropagation();
+  });
+  rz.addEventListener("pointermove", (e) => {
+    if (!sizing) return;
+    c.w = Math.max(120, rzOrig.w + (e.clientX - rzStart.x) / zoom);
+    c.h = Math.max(80, rzOrig.h + (e.clientY - rzStart.y) / zoom);
+    el.style.width = c.w + "px"; el.style.height = c.h + "px";
+  });
+  rz.addEventListener("pointerup", () => { if (sizing) { sizing = false; save(); } });
   layer.appendChild(el);
   if (edit) setTimeout(() => body.focus(), 0);
 }
@@ -1820,10 +1892,15 @@ function openPenMultiEditor() {
   syncPmeControls();
   $("#penMultiEditor").classList.remove("hidden");
 }
+// 同步多笔编辑面板的取色器 + 十六进制框到某色值
+function setPmeColor(c) {
+  $("#pmeColor").value = c;
+  const hx = $("#pmeColorHex"); if (hx) { hx.value = c; hx.classList.remove("invalid"); }
+}
 function buildPmePalette() {
   const colors = ["#1a1a1a", "#e2453b", "#2f7be6", "#1f9d55", "#f5a623", "#8e44ad", "#d63384", "#00897b"];
   $("#pmePalette").innerHTML = colors.map((c) => `<span class="sw" style="background:${c}" data-c="${c}"></span>`).join("");
-  $$("#pmePalette .sw").forEach((el) => el.addEventListener("click", () => { $("#pmeColor").value = el.dataset.c; }));
+  $$("#pmePalette .sw").forEach((el) => el.addEventListener("click", () => setPmeColor(el.dataset.c)));
 }
 function renderPmePens() {
   const box = $("#pmePens");
@@ -1836,13 +1913,13 @@ function renderPmePens() {
     if (pmeSel.has(i)) pmeSel.delete(i); else pmeSel.add(i);
     renderPmePens();
     // 单选时把控件同步到该笔，方便连续快速编辑
-    if (pmeSel.size === 1) { const p = pens[[...pmeSel][0]]; if (p) { $("#pmeColor").value = p.color; $("#pmeSize").value = p.size; $("#pmeSizeVal").textContent = p.size; } }
+    if (pmeSel.size === 1) { const p = pens[[...pmeSel][0]]; if (p) { setPmeColor(p.color); $("#pmeSize").value = p.size; $("#pmeSizeVal").textContent = p.size; } }
   }));
 }
 function syncPmeControls() {
   $$("#pmeKind .kind").forEach((el) => el.classList.toggle("on", el.dataset.kind === "keep"));
   const first = pens[[...pmeSel][0]];
-  if (first) { $("#pmeColor").value = first.color; $("#pmeSize").value = first.size; $("#pmeSizeVal").textContent = first.size; }
+  if (first) { setPmeColor(first.color); $("#pmeSize").value = first.size; $("#pmeSizeVal").textContent = first.size; }
 }
 function applyPmeToSelected() {
   if (!pmeSel.size) { toast("先选中要修改的笔"); return; }
@@ -1863,7 +1940,12 @@ function bindPenMultiEditor() {
   on("#pmeApply", "click", applyPmeToSelected);
   on("#pmeSelAll", "click", () => { pmeSel = new Set(pens.map((_, i) => i)); renderPmePens(); });
   on("#pmeSize", "input", (e) => $("#pmeSizeVal").textContent = e.target.value);
-  on("#pmeColor", "input", () => {});
+  on("#pmeColor", "input", (e) => { const hx = $("#pmeColorHex"); if (hx) { hx.value = e.target.value; hx.classList.remove("invalid"); } });
+  on("#pmeColorHex", "input", (e) => {
+    const hx = normalizeHex(e.target.value);
+    if (hx) { e.target.classList.remove("invalid"); $("#pmeColor").value = hx; }
+    else e.target.classList.add("invalid");
+  });
   $$("#pmeKind .kind").forEach((el) => el.addEventListener("click", () => {
     $$("#pmeKind .kind").forEach((b) => b.classList.toggle("on", b === el));
   }));
