@@ -22,6 +22,9 @@ function createWindow() {
       preload: path.join(__dirname, "..", "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // 分屏用 iframe 再跑一份 index.html —— 让 preload 也注入到子框架，
+      // iframe 实例才能拿到 window.api（同源、隔离世界，各自独立的 api）。
+      nodeIntegrationInSubFrames: true,
     },
   });
   win.setMenuBarVisibility(false);
@@ -56,7 +59,14 @@ ipcMain.handle("get-state", () => ({
   settings: store.get("settings"),
 }));
 
-ipcMain.handle("save-notebooks", (_e, notebooks) => { store.set("notebooks", notebooks); return true; });
+ipcMain.handle("save-notebooks", (e, notebooks) => {
+  store.set("notebooks", notebooks);
+  // 保存成功后向所有窗口的 webContents 广播（跨窗口兜底同步；
+  // 同页面内主实例↔iframe 实例的实时同步走渲染进程的 BroadcastChannel）。
+  const sourceId = e.sender.id;
+  for (const w of BrowserWindow.getAllWindows()) w.webContents.send("notebooks-updated", { sourceId });
+  return true;
+});
 ipcMain.handle("set-active", (_e, id) => { store.set("activeNotebook", id); return true; });
 ipcMain.handle("update-settings", (_e, patch) => {
   const s = { ...store.get("settings"), ...patch };

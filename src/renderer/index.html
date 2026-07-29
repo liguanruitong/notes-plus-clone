@@ -44,6 +44,7 @@
     <div class="tb-right">
       <button id="btnImport" class="ic" title="导入"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M5 21h14"/></svg></button>
       <button id="btnExport" class="ic" title="导出/分享"><svg viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4"/><path d="M5 14v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"/></svg></button>
+      <button id="btnSplit" class="ic" title="分屏"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></button>
       <span class="tb-avatar">李</span>
       <button id="btnSearch" class="ic" title="搜索"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></button>
       <button id="btnZoomFit" class="ic" title="适应屏幕"><svg viewBox="0 0 24 24"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"/></svg></button>
@@ -64,6 +65,11 @@
       <button data-exp="pdf">整本 PDF…</button>
       <button data-exp="xopp">整本 Xournal++ (.xopp)…</button>
     </div>
+    <!-- 分屏下拉：同笔记双开 / 打开另一笔记 -->
+    <div id="splitMenu" class="dropdown">
+      <button data-split="same">分屏 · 同一笔记</button>
+      <button data-split="other">分屏 · 打开另一笔记…</button>
+    </div>
   </header>
 
   <!-- 左侧抽屉：页面缩略图 -->
@@ -80,6 +86,7 @@
 
   <!-- 画布：竖向连续滚动的多页列。每页一个静态预览槽（renderer.js 生成），
        唯一的可交互「活动页」画布栈 #canvasWrap 浮在当前页槽之上。 -->
+  <div id="splitWrap">
   <main id="stage">
     <div id="pagesColumn">
       <div id="canvasWrap">
@@ -100,6 +107,7 @@
       <button id="selDel" class="sel-b danger" title="删除"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>
     </div>
   </main>
+  </div><!-- /#splitWrap -->
 
   <!-- 底部悬浮胶囊工具条（Note+ 核心视觉） -->
   <div id="dock">

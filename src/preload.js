@@ -13,4 +13,6 @@ contextBridge.exposeInMainWorld("api", {
   importPdf: () => ipcRenderer.invoke("import-pdf"),
   importXopp: () => ipcRenderer.invoke("import-xopp"),
   exportXopp: (payload) => ipcRenderer.invoke("export-xopp", payload),
+  // 分屏同步兜底：保存后主进程广播 notebooks-updated（携带发起方 webContents.id）
+  onNotebooksUpdated: (cb) => ipcRenderer.on("notebooks-updated", (_e, data) => cb(data)),
 });

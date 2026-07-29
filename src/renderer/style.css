@@ -112,7 +112,7 @@ svg.i16 { width: 16px; height: 16px; }
   border: 1px solid var(--line); border-radius: 12px; padding: 6px; display: none;
   flex-direction: column; gap: 2px; z-index: 100; box-shadow: var(--shadow-pop);
 }
-#importMenu { left: 120px; } #exportMenu { right: 120px; }
+#importMenu { left: 120px; } #exportMenu { right: 120px; } #splitMenu { right: 60px; }
 .dropdown.open { display: flex; }
 .dropdown button {
   background: none; border: none; color: var(--text); text-align: left;
@@ -121,8 +121,23 @@ svg.i16 { width: 16px; height: 16px; }
 .dropdown button:hover { background: rgba(0,122,255,.1); color: var(--accent); }
 
 /* ═══════════ 左侧抽屉 ═══════════ */
+/* 分屏容器：占据顶栏之下的整片区域，横向 flex 放【左侧 stage | 分隔条 | 右侧 iframe】。
+   非分屏时只有 stage 一个孩子并 flex:1 占满，行为与旧版完全一致。 */
+#splitWrap { position: absolute; inset: 48px 0 0 0; display: flex; }
 /* 画布靠 translate 平移，stage 自身不滚动（overflow:hidden 裁掉移出可视区的内容） */
-#stage { position: absolute; inset: 48px 0 0 0; overflow: hidden; background: var(--stage-bg); }
+#stage { position: relative; flex: 1 1 0; min-width: 0; height: 100%; overflow: hidden; background: var(--stage-bg); }
+/* 分屏：左右两侧 flex-basis 由 JS 控制（拖分隔条调整），iframe 独立跑一份引擎 */
+.split-frame { flex: 1 1 0; min-width: 0; height: 100%; border: none; background: var(--stage-bg); display: block; }
+#splitDivider { flex: 0 0 4px; cursor: col-resize; background: var(--line); position: relative; z-index: 41; }
+#splitDivider:hover, #splitDivider.dragging { background: var(--accent); }
+body.split-on #dock { left: 25%; }   /* 分屏时把左侧 dock 移到左半区中心，避让右侧画布 */
+
+/* 分屏右侧子视图（iframe 里那份实例）：精简 —— 隐藏返回书架/分屏/导入导出/搜索等
+   只属于主实例的入口，避免递归分屏与误操作；保留画笔 dock 与画布。#splitWrap 占满整窗。 */
+body.pane-right #btnBack, body.pane-right #btnSplit,
+body.pane-right #btnImport, body.pane-right #btnExport,
+body.pane-right #btnSearch, body.pane-right .tb-avatar { display: none; }
+body.pane-right #splitWrap { inset: 48px 0 0 0; }
 /* 竖向连续多页列：靠 translate(panX,panY) 自由定位（不再 margin:auto 居中），
    页与页之间由 JS 设 margin 控制间隔。transform-origin 左上，与 wrap 的 scale 一致。 */
 #pagesColumn { position: relative; margin: 0; transform-origin: 0 0; will-change: transform; }

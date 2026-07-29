@@ -30,6 +30,17 @@ const bgCache = new Map();
 
 const undoStack = [], redoStack = [];
 
+// ═══════════ 分屏（iframe 双实例）——URL 参数 & 跨实例同步通道 ═══════════
+// 分屏 = 右侧用 <iframe src="index.html?pane=right&nb=..."> 再跑一份完整引擎实例。
+// 两个实例同源，用 BroadcastChannel 近实时同步「同一本笔记」的落盘内容。
+const params = new URLSearchParams(location.search);
+const paneMode = params.get("pane");     // 'right' = 自己是被嵌入 iframe 的右侧实例
+const forcedNb = params.get("nb");       // 右侧实例强制打开的笔记 id
+const paneSelf = paneMode || "left";
+const bc = new BroadcastChannel("notes-plus-sync");
+let pendingSync = false;                 // 书写/手势中收到同步 → 延迟到抬手后再刷新
+let splitOn = false, splitRatio = 0.5;   // 左侧主实例的分屏状态
+
 const paper = $("#paper"), ink = $("#ink"), overlay = $("#overlay");
 const pctx = paper.getContext("2d"), ictx = ink.getContext("2d"), octx = overlay.getContext("2d");
 const wrap = $("#canvasWrap"), stage = $("#stage"), textLayer = $("#textLayer");
@@ -94,7 +105,15 @@ async function init() {
   buildToolGrid();
   buildDockTools();
   buildPalette();
+  bindSplit();
+  bindSync();
 
+  // 右侧分屏子实例：直接打开指定笔记、进入精简子视图，跳过书架
+  if (paneMode === "right") {
+    document.body.classList.add("pane-right");
+    if (forcedNb) openNotebook(forcedNb); else showShelf();
+    return;
+  }
   renderShelf();
   showShelf();
 }
@@ -1016,6 +1035,12 @@ function bindDrawing() {
   }, { passive: false });
   // 双击画布空白处（非绘制交互区）快速复位视图
   stage.addEventListener("dblclick", (e) => { if (e.target === stage || e.target === pagesCol) resetView(); });
+  // 窗口/分屏尺寸变化：本实例重算画布栈与活动页（各实例监听各自的 resize）
+  let resizeRAF = 0;
+  window.addEventListener("resize", () => {
+    if (resizeRAF) return;
+    resizeRAF = requestAnimationFrame(() => { resizeRAF = 0; if (nb && !$("#editor").classList.contains("hidden")) { resizeActiveCanvases(); applyTransform(); updateActivePageByPan(); } });
+  });
   bindTextLayer();
 }
 
@@ -2104,10 +2129,131 @@ function closeTopLayer() {
 }
 function usePenTool(t) { tool = t; selectTool(t); }
 
+// ═══════════ 分屏（iframe 双实例） ═══════════
+// 左侧主实例：顶栏「分屏」按钮 → 下拉两项。右侧用 iframe 再跑一份 index.html。
+function bindSplit() {
+  const btn = $("#btnSplit"), menu = $("#splitMenu");
+  if (!btn || !menu) return;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (splitOn) { closeSplit(); return; }   // 已分屏 → 按钮变「关闭分屏」
+    const open = menu.classList.contains("open");
+    $$(".dropdown").forEach((d) => d.classList.remove("open"));
+    if (!open) menu.classList.add("open");
+  });
+  $$("#splitMenu button").forEach((b) => b.addEventListener("click", () => {
+    menu.classList.remove("open");
+    openSplit(b.dataset.split);
+  }));
+}
+async function openSplit(mode) {
+  if (!nb || splitOn) return;
+  let rightNb = nb.id;
+  if (mode === "other") {
+    const items = state.notebooks.map((n) => ({ id: n.id, label: n.title, color: n.cover }));
+    const pick = await modalList({ title: "选择右侧笔记", items });
+    if (!pick) return;
+    rightNb = pick;
+  }
+  const wrap = $("#splitWrap");
+  const divider = document.createElement("div"); divider.id = "splitDivider";
+  const frame = document.createElement("iframe");
+  frame.id = "splitFrame"; frame.className = "split-frame";
+  frame.src = `index.html?pane=right&nb=${encodeURIComponent(rightNb)}`;
+  wrap.appendChild(divider); wrap.appendChild(frame);
+  bindDivider(divider);
+  splitOn = true; splitRatio = 0.5;
+  document.body.classList.add("split-on");
+  applySplitRatio();
+  const btn = $("#btnSplit"); if (btn) btn.title = "关闭分屏";
+  applyTransform(); updateActivePageByPan();
+  toast("已开启分屏");
+}
+function closeSplit() {
+  if (!splitOn) return;
+  $("#splitFrame")?.remove();
+  $("#splitDivider")?.remove();
+  splitOn = false;
+  document.body.classList.remove("split-on");
+  $("#stage").style.flexBasis = "";
+  const btn = $("#btnSplit"); if (btn) btn.title = "分屏";
+  applyTransform(); updateActivePageByPan();
+  toast("已关闭分屏");
+}
+// 左右宽度按 splitRatio 分配（分隔条固定 4px）
+function applySplitRatio() {
+  const stage = $("#stage"), frame = $("#splitFrame");
+  if (!frame) return;
+  stage.style.flexBasis = `calc(${(splitRatio * 100).toFixed(2)}% - 2px)`;
+  frame.style.flexBasis = `calc(${((1 - splitRatio) * 100).toFixed(2)}% - 2px)`;
+}
+function bindDivider(el) {
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); el.classList.add("dragging"); el.setPointerCapture(e.pointerId);
+    const wrap = $("#splitWrap"), rect = wrap.getBoundingClientRect();
+    const mv = (ev) => {
+      let r = (ev.clientX - rect.left) / rect.width;
+      splitRatio = Math.max(0.2, Math.min(0.8, r));
+      applySplitRatio(); applyTransform();
+    };
+    const up = () => { el.classList.remove("dragging"); el.removeEventListener("pointermove", mv); el.removeEventListener("pointerup", up); updateActivePageByPan(); };
+    el.addEventListener("pointermove", mv); el.addEventListener("pointerup", up);
+  });
+}
+
+// ═══════════ 跨实例数据同步（BroadcastChannel + 主进程广播兜底） ═══════════
+// 本实例真正落盘后广播；其它同源实例若正看同一本笔记则近实时刷新。
+let lastSelfSaveTs = 0;
+function broadcastSaved() { lastSelfSaveTs = Date.now(); try { bc.postMessage({ type: "saved", nbId: nb ? nb.id : null, from: paneSelf }); } catch {} }
+// 是否正处于不宜打断的交互（书写/平移/套索/选区手势/文本编辑）
+function syncBusy() {
+  const ed = document.activeElement;
+  const editingText = ed && (ed.classList?.contains("text-box") || ed.classList?.contains("card-body"));
+  return drawing || panning || lassoPts || selGesture || editingText;
+}
+function bindSync() {
+  bc.onmessage = (e) => {
+    const m = e.data;
+    if (!m || m.type !== "saved") return;
+    if (m.from === paneSelf) return;                 // 自己发的忽略
+    if (!nb || m.nbId !== nb.id) return;             // 不是当前这本忽略（不同笔记天然隔离）
+    if (syncBusy()) { pendingSync = nb.id; return; } // 正在书写/编辑 → 延迟到抬手后
+    pullAndRefresh(nb.id);
+  };
+  // 主进程广播兜底（跨窗口）。注意：iframe 与主页面同属一个 webContents，广播会回到
+  // 自己这一侧 → 用刚落盘的时间戳过滤掉自触发（否则每一笔都自刷）。
+  if (window.api.onNotebooksUpdated) window.api.onNotebooksUpdated(() => {
+    if (Date.now() - lastSelfSaveTs < 600) return;   // 自己刚存的回声，跳过
+    if (!nb || syncBusy()) { if (nb) pendingSync = nb.id; return; }
+    pullAndRefresh(nb.id);
+  });
+  // 任意抬手后补刷被延迟的同步（覆盖文本/卡片编辑 blur、图片拖拽等场景）
+  window.addEventListener("pointerup", () => setTimeout(flushPendingSync, 0), true);
+  // 安全网：定时补刷挂起的同步（<1s 延迟，兜住无抬手事件跟随的场景）
+  setInterval(flushPendingSync, 800);
+}
+// 从主进程重新拉取指定笔记的最新数据并刷新当前显示
+async function pullAndRefresh(nbId) {
+  const fresh = await window.api.getState();
+  const updated = fresh.notebooks.find((n) => n.id === nbId);
+  if (!updated) return;
+  const idx = state.notebooks.findIndex((n) => n.id === nbId);
+  if (idx >= 0) state.notebooks[idx] = updated; else state.notebooks.push(updated);
+  if (!nb || nb.id !== nbId) return;                 // 已切走则只更新数据不刷新视图
+  const curId = curPage()?.id;
+  nb = updated;
+  pageIdx = Math.max(0, nb.pages.findIndex((p) => p.id === curId));
+  if (pageIdx < 0 || pageIdx >= nb.pages.length) pageIdx = Math.min(pageIdx, nb.pages.length - 1);
+  bgCache.clear();
+  resizeActiveCanvases(); buildPages(); renderAll(); renderTexts();
+}
+// 书写/手势抬手后若有挂起的同步，补刷一次
+function flushPendingSync() { if (pendingSync && !syncBusy()) { const id = pendingSync; pendingSync = false; pullAndRefresh(id); } }
+
 // ═══════════ 持久化 ═══════════
 let saveTimer;
-function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => window.api.saveNotebooks(state.notebooks), 400); }
-function saveNow() { clearTimeout(saveTimer); return window.api.saveNotebooks(state.notebooks); }
+function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => window.api.saveNotebooks(state.notebooks).then(broadcastSaved), 400); }
+function saveNow() { clearTimeout(saveTimer); return window.api.saveNotebooks(state.notebooks).then((r) => { broadcastSaved(); return r; }); }
 
 // ═══════════ busy / 合成 ═══════════
 function busy(on, text) { const b = $("#busy"); if (text) $("#busyText").textContent = text; b.classList.toggle("hidden", !on); }
