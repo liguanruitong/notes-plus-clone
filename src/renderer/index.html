@@ -46,6 +46,9 @@
       <span class="tb-avatar">李</span>
       <button id="btnSearch" class="ic" title="搜索"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></button>
       <button id="btnZoomFit" class="ic" title="适应屏幕"><svg viewBox="0 0 24 24"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"/></svg></button>
+      <button id="btnResetView" class="ic" title="复位/居中视图"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/><circle cx="12" cy="12" r="2.5"/></svg></button>
+      <button id="btnOverview" class="ic" title="全览所有页"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/></svg></button>
+      <span id="pageInd" class="zoom" title="当前页 / 总页数">1/1</span>
       <span id="zoomVal" class="zoom">100%</span>
     </div>
     <!-- 导入/导出下拉 -->
@@ -128,6 +131,7 @@
         <button id="btnHotkeyList" class="pop-link">展开</button>
       </div>
       <div id="hotkeyList" class="hotkey-list hidden"></div>
+      <button id="btnActionHotkeys" class="mini-btn wide" style="margin-top:8px">⌨ 快捷键设置（全部动作）</button>
     </div>
     <div id="penEdit" class="pen-edit hidden">
       <div id="penKind" class="pen-kind">
@@ -381,6 +385,20 @@
           <button id="pmeDel" class="mini-btn danger">删除选中</button>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 全操作自定义快捷键 ═══════════ -->
+<div id="actionHotkeyEditor" class="tpl-editor hidden">
+  <div class="te-card ah-card">
+    <div class="te-head">
+      <span class="te-title">快捷键设置</span>
+      <button id="ahClose" class="te-save">完成</button>
+    </div>
+    <div class="ah-body">
+      <div class="de-hint">给任意动作绑定一个单键。点右侧按钮进入捕获态后按下要绑定的键，✕ 清除。一个键同一时刻只归一个目标（笔或动作），冲突会自动改绑。</div>
+      <div id="ahList" class="ah-list"></div>
     </div>
   </div>
 </div>

@@ -28,6 +28,7 @@ const store = new Store({
       ],
       customTemplates: [],
       folders: [],
+      actionHotkeys: {},   // { actionId: "键" } —— 全操作自定义快捷键（v1.7.0）
     },
   },
 });

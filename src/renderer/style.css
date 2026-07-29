@@ -121,9 +121,11 @@ svg.i16 { width: 16px; height: 16px; }
 .dropdown button:hover { background: rgba(0,122,255,.1); color: var(--accent); }
 
 /* ═══════════ 左侧抽屉 ═══════════ */
-#stage { position: absolute; inset: 48px 0 0 0; overflow-y: auto; overflow-x: auto; background: var(--stage-bg); }
-/* 竖向连续多页列：居中、上下留白，页与页之间由 JS 设 margin 控制间隔 */
-#pagesColumn { position: relative; margin: 30px auto; }
+/* 画布靠 translate 平移，stage 自身不滚动（overflow:hidden 裁掉移出可视区的内容） */
+#stage { position: absolute; inset: 48px 0 0 0; overflow: hidden; background: var(--stage-bg); }
+/* 竖向连续多页列：靠 translate(panX,panY) 自由定位（不再 margin:auto 居中），
+   页与页之间由 JS 设 margin 控制间隔。transform-origin 左上，与 wrap 的 scale 一致。 */
+#pagesColumn { position: relative; margin: 0; transform-origin: 0 0; will-change: transform; }
 .page-slot { position: relative; background: var(--paper); box-shadow: 0 8px 30px rgba(0,0,0,.16); border-radius: 2px; }
 .page-slot canvas.page-static { position: absolute; top: 0; left: 0; display: block; }
 .drawer {
@@ -557,6 +559,20 @@ svg.i16 { width: 16px; height: 16px; }
 .de-knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .18s; }
 .de-toggle.on .de-knob { transform: translateX(18px); }
+/* 全操作自定义快捷键编辑器 */
+.ah-card { width: 460px; max-width: 94vw; }
+.ah-body { padding: 16px 18px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; max-height: 80vh; }
+.ah-list { display: flex; flex-direction: column; gap: 6px; }
+.ah-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #F7F7F8; border-radius: 10px; }
+.ah-name { flex: 1; font-size: 14px; color: var(--text); }
+.ah-key { min-width: 84px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+  font: inherit; font-size: 13px; color: var(--dim); cursor: pointer; text-align: center; transition: .12s; }
+.ah-key:hover { border-color: var(--accent); }
+.ah-key.bound { color: var(--accent); font-weight: 700; }
+.ah-key.capturing { border-color: var(--accent); color: var(--accent); background: rgba(0,122,255,.08); animation: hkPulse 1s ease-in-out infinite; }
+.ah-clear { width: 28px; height: 28px; flex: none; border: none; background: rgba(0,0,0,.05); border-radius: 8px;
+  color: var(--dim); cursor: pointer; font-size: 13px; line-height: 1; }
+.ah-clear:hover { background: rgba(255,59,48,.12); color: var(--danger); }
 
 /* 批量编辑：笔选择网格 */
 .pme-pens { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; min-height: 56px;

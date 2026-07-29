@@ -15,7 +15,12 @@ let tool = "pen", color = "#1a1a1a", size = 3;
 // 默认粗细压感强度 0.5 —— 与旧版 size*(0.5+p) 手感完全一致，保留用户喜欢的质感
 let penOpacity = 1, pWidthOn = true, pWidthAmt = 0.5, pAlphaOn = false, pAlphaAmt = 0.5;
 let zoom = 1;
+// 画布自由平移偏移量（逻辑像素，作用于 #pagesColumn 的 translate）。
+// 不再靠 margin:auto 居中或 scrollLeft/Top 平移 —— 允许把画布任意角落拖到屏幕任何位置。
+let panX = 0, panY = 0;
+let spaceDown = false;   // 空格按住 = 临时平移模式（任何工具下均可）
 let pens = [], activePen = 0;
+let actionHotkeys = {};   // { actionId: "键" } —— 全操作自定义快捷键
 let customTemplates = [];
 let eraserMode = "stroke", eraserSize = 18;   // stroke=整笔 / pixel=像素
 let dockTools = [];        // 笔盒自定义：[{t, on}]，顺序即显示顺序
@@ -47,6 +52,7 @@ async function init() {
   const s = state.settings;
   tool = s.lastTool || "pen"; color = s.lastColor || "#1a1a1a"; size = s.lastSize || 3;
   pens = s.pens || []; activePen = s.activePen || 0; customTemplates = s.customTemplates || [];
+  actionHotkeys = s.actionHotkeys || {};
   eraserMode = s.eraserMode || "pixel"; eraserSize = s.eraserSize || 18;
   pageGap = s.pageGap != null ? s.pageGap : 24;
   applyThemeColor(s.themeColor || "#007AFF");
@@ -84,6 +90,7 @@ async function init() {
   bindPageGap();
   bindTheme();
   bindPaperExpander();
+  bindActionHotkeys();
   buildToolGrid();
   buildDockTools();
   buildPalette();
@@ -264,7 +271,6 @@ async function openNotebook(id) {
   buildPages();
   renderAll();
   renderTexts();
-  stage.scrollTop = 0;
 }
 
 // ═══════════ 竖向连续多页布局 / 缩放 ═══════════
@@ -305,6 +311,8 @@ function applyTransform() {
   wrap.style.width = PW + "px"; wrap.style.height = PH + "px";
   wrap.style.transform = `scale(${zoom})`; wrap.style.transformOrigin = "0 0";
   $("#zoomVal").textContent = Math.round(zoom * 100) + "%";
+  // 整列自由平移：wrap 相对 pagesCol 绝对定位，随之一起移动，无需单独平移 wrap。
+  pagesCol.style.transform = `translate(${panX}px, ${panY}px)`;
   positionLiveStack();
   if (sel) drawSelection();
 }
@@ -325,9 +333,13 @@ function refreshPageStatic(i) {
   // 挖空块（合上态）在静态预览里画成实心色块
   for (const cv of nb.pages[i].covers || []) { if (cv.open) continue; cx.fillStyle = cv.color || "#3c3c43"; roundRect(cx, cv.x, cv.y, cv.w, cv.h, 6); cx.fill(); }
 }
+// 平移到某页：把该页顶部对齐到视口上方留白处，水平居中该页。
 function scrollToPage(i) {
   const slot = pagesCol.querySelector(`.page-slot[data-i="${i}"]`);
-  if (slot) stage.scrollTop = slot.offsetTop - 20;
+  if (!slot) return;
+  panY = 30 - slot.offsetTop;
+  panX = (stage.clientWidth - slot.offsetWidth) / 2 - slot.offsetLeft;
+  applyTransform();
 }
 // 切换活动页（可编辑页）。prev 页转为静态预览。
 function setActivePage(i, opts = {}) {
@@ -339,18 +351,24 @@ function setActivePage(i, opts = {}) {
   undoStack.length = 0; redoStack.length = 0;
   resizeActiveCanvases();
   buildTemplatePicker(); positionLiveStack(); renderAll();
+  updatePageIndicator();
 }
-// 滚动 → 视口中心页成为活动页（书写时不打断）
-let scrollRAF = 0;
-function onStageScroll() {
-  if (scrollRAF) return;
-  scrollRAF = requestAnimationFrame(() => {
-    scrollRAF = 0;
-    if (drawing || panning || lassoPts || selGesture) return;
-    const mid = stage.scrollTop + stage.clientHeight / 2;
+// 页码指示：第 X / 共 N 页
+function updatePageIndicator() {
+  const el = $("#pageInd"); if (el && nb) el.textContent = `${pageIdx + 1}/${nb.pages.length}`;
+}
+// 平移后按视口中心决定活动页（不再依赖 scrollTop）。书写/平移/套索/选区手势时不切页。
+let activePageRAF = 0;
+function updateActivePageByPan() {
+  if (activePageRAF) return;
+  activePageRAF = requestAnimationFrame(() => {
+    activePageRAF = 0;
+    if (!nb || drawing || panning || lassoPts || selGesture) return;
+    // 视口中心在 pagesCol 局部坐标里的 y（pagesCol 顶部 = panY，故减去 panY）
+    const midY = stage.clientHeight / 2 - panY;
     let best = pageIdx, bestD = Infinity;
     pagesCol.querySelectorAll(".page-slot").forEach((slot) => {
-      const c = slot.offsetTop + slot.offsetHeight / 2, d = Math.abs(c - mid);
+      const c = slot.offsetTop + slot.offsetHeight / 2, d = Math.abs(c - midY);
       if (d < bestD) { bestD = d; best = +slot.dataset.i; }
     });
     if (best !== pageIdx) setActivePage(best);
@@ -359,9 +377,41 @@ function onStageScroll() {
 function fitToStage() {
   const pad = 40;
   zoom = Math.min((stage.clientWidth - pad) / PW, (stage.clientHeight - pad) / PH, 2);
+  // 初始平移：首页水平居中、顶部留 30px 边距。负值也允许（内容可拖出可视区）。
+  const colW = PW * zoom;
+  panX = (stage.clientWidth - colW) / 2;
+  panY = 30;
+  applyTransform();
+  updateActivePageByPan();
+}
+// 缩放：以视口中心为锚，保持中心处内容位置不变，体验更自然。
+function setZoom(z) {
+  const nz = Math.max(0.15, Math.min(6, z));
+  const cx = stage.clientWidth / 2, cy = stage.clientHeight / 2;
+  const k = nz / zoom;
+  panX = cx - (cx - panX) * k;
+  panY = cy - (cy - panY) * k;
+  zoom = nz;
+  applyTransform();
+  updateActivePageByPan();
+}
+// 复位视图：重新居中并适应屏幕（供顶栏按钮 / resetView 动作 / 双击空白复用）
+function resetView() { fitToStage(); }
+// 快速全览：缩到能看到全部页的概览（记录上次视图，再次触发则恢复）
+let overviewPrev = null;
+function toggleOverview() {
+  if (!nb) return;
+  if (overviewPrev) { ({ zoom, panX, panY } = overviewPrev); overviewPrev = null; applyTransform(); updateActivePageByPan(); return; }
+  overviewPrev = { zoom, panX, panY };
+  // 全部页在 zoom=1 下的总高/最宽
+  let totalH = 0, maxW = 0;
+  nb.pages.forEach((p, i) => { totalH += pageH(p) + (i ? pageGap : 0); maxW = Math.max(maxW, pageW(p)); });
+  const pad = 60;
+  zoom = Math.max(0.15, Math.min((stage.clientWidth - pad) / maxW, (stage.clientHeight - pad) / totalH, 1));
+  panX = (stage.clientWidth - maxW * zoom) / 2;
+  panY = (stage.clientHeight - totalH * zoom) / 2;
   applyTransform();
 }
-function setZoom(z) { zoom = Math.max(0.15, Math.min(6, z)); applyTransform(); }
 // 视口中心对应的活动页逻辑坐标（用于插图/加卡片时定位）
 function viewCenterLogical() {
   const r = ink.getBoundingClientRect();
@@ -642,14 +692,92 @@ function startHotkeyCapture() {
 function setPenHotkey(key) {
   const p = pens[activePen]; if (!p) return;
   const prev = pens.find((q, i) => i !== activePen && q.hotkey === key);
-  if (prev) { prev.hotkey = ""; toast(`快捷键 ${hkLabel(key)} 已从其它笔改绑到此笔`); }
+  // 该键若被某动作占用，先解绑动作（一键全局唯一）
+  let prevAct = null;
+  for (const k in actionHotkeys) if (actionHotkeys[k] === key) { prevAct = k; delete actionHotkeys[k]; }
+  if (prevAct) { window.api.updateSettings({ actionHotkeys }); toast(`快捷键 ${hkLabel(key)} 已从「${actionDef(prevAct).label}」改绑到此笔`); }
+  else if (prev) { prev.hotkey = ""; toast(`快捷键 ${hkLabel(key)} 已从其它笔改绑到此笔`); }
   else toast(`已绑定快捷键 ${hkLabel(key)}`);
+  if (prev) prev.hotkey = "";
   p.hotkey = key;
   window.api.updateSettings({ pens }); buildPens(); syncHotkeyUI(); renderHotkeyList();
 }
 function clearPenHotkey() {
   const p = pens[activePen]; if (!p || !p.hotkey) { syncHotkeyUI(); return; }
   p.hotkey = ""; window.api.updateSettings({ pens }); buildPens(); syncHotkeyUI(); renderHotkeyList(); toast("已清除快捷键");
+}
+// ═══════════ 全操作自定义快捷键 ═══════════
+// 可绑定动作表：每项 { id, label, run }。run 调用现有实现。
+const ACTIONS = [
+  { id: "undo",       label: "撤销",       run: undo },
+  { id: "redo",       label: "重做",       run: redo },
+  { id: "pen",        label: "钢笔",       run: () => usePenTool("pen") },
+  { id: "highlighter",label: "荧光笔",     run: () => usePenTool("highlighter") },
+  { id: "eraser",     label: "橡皮擦",     run: () => selectTool("eraser") },
+  { id: "lasso",      label: "套索选择",   run: () => selectTool("lasso") },
+  { id: "text",       label: "文本工具",   run: () => selectTool("text") },
+  { id: "pan",        label: "平移工具",   run: () => selectTool("pan") },
+  { id: "shot",       label: "截图笔",     run: () => selectTool("shot") },
+  { id: "laser",      label: "激光笔",     run: () => selectTool("laser") },
+  { id: "prevPage",   label: "上一页",     run: prevPage },
+  { id: "nextPage",   label: "下一页",     run: nextPage },
+  { id: "addPage",    label: "新建页",     run: () => addPage() },
+  { id: "zoomIn",     label: "放大",       run: () => setZoom(zoom * 1.15) },
+  { id: "zoomOut",    label: "缩小",       run: () => setZoom(zoom * 0.87) },
+  { id: "fitToStage", label: "适应屏幕",   run: fitToStage },
+  { id: "resetView",  label: "复位视图",   run: resetView },
+  { id: "overview",   label: "快速全览",   run: toggleOverview },
+  { id: "clearPage",  label: "清空当前页", run: clearPage },
+  { id: "exportPdf",  label: "导出 PDF",   run: exportPdf },
+  { id: "exportPng",  label: "导出 PNG",   run: () => exportRaster("png") },
+];
+const actionDef = (id) => ACTIONS.find((a) => a.id === id);
+// 动作捕获态：当前正在为哪个 actionId 按键（null=未捕获）
+let hkCaptureAction = null;
+function bindActionHotkeys() {
+  on("#btnActionHotkeys", "click", (e) => { e.stopPropagation(); $("#morePanel").classList.add("hidden"); openActionHotkeys(); });
+  on("#ahClose", "click", () => { hkCaptureAction = null; $("#actionHotkeyEditor").classList.add("hidden"); });
+  const dlg = $("#actionHotkeyEditor");
+  if (dlg) dlg.addEventListener("click", (e) => { if (e.target === dlg) { hkCaptureAction = null; dlg.classList.add("hidden"); } });
+}
+function openActionHotkeys() { renderActionHotkeys(); $("#actionHotkeyEditor").classList.remove("hidden"); }
+function renderActionHotkeys() {
+  const list = $("#ahList"); if (!list) return;
+  list.innerHTML = ACTIONS.map((a) => {
+    const hk = actionHotkeys[a.id];
+    const cap = hkCaptureAction === a.id;
+    return `<div class="ah-row" data-id="${a.id}">
+      <span class="ah-name">${a.label}</span>
+      <button class="ah-key${hk ? " bound" : ""}${cap ? " capturing" : ""}" data-cap="${a.id}">${cap ? "请按一个键…" : (hk ? hkLabel(hk) : "未设置")}</button>
+      <button class="ah-clear" data-clr="${a.id}" style="visibility:${hk ? "visible" : "hidden"}">✕</button>
+    </div>`;
+  }).join("");
+  $$("#ahList .ah-key").forEach((el) => el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    hkCaptureAction = hkCaptureAction === el.dataset.cap ? null : el.dataset.cap;
+    renderActionHotkeys();
+  }));
+  $$("#ahList .ah-clear").forEach((el) => el.addEventListener("click", (e) => {
+    e.stopPropagation(); clearActionHotkey(el.dataset.clr);
+  }));
+}
+// 绑定动作快捷键：一键全局唯一，冲突则解绑旧的（笔或动作）并提示
+function setActionHotkey(id, key) {
+  const prevPen = pens.find((p) => p.hotkey === key);
+  if (prevPen) { prevPen.hotkey = ""; window.api.updateSettings({ pens }); buildPens(); toast(`快捷键 ${hkLabel(key)} 已从笔改绑到「${actionDef(id).label}」`); }
+  let prevAct = null;
+  for (const k in actionHotkeys) if (actionHotkeys[k] === key && k !== id) { prevAct = k; delete actionHotkeys[k]; }
+  if (prevAct) toast(`快捷键 ${hkLabel(key)} 已从「${actionDef(prevAct).label}」改绑到「${actionDef(id).label}」`);
+  if (!prevPen && !prevAct) toast(`已绑定 ${hkLabel(key)} → ${actionDef(id).label}`);
+  actionHotkeys[id] = key; hkCaptureAction = null;
+  window.api.updateSettings({ actionHotkeys });
+  renderActionHotkeys(); renderHotkeyList();
+}
+function clearActionHotkey(id) {
+  if (!actionHotkeys[id]) return;
+  delete actionHotkeys[id];
+  window.api.updateSettings({ actionHotkeys });
+  renderActionHotkeys(); renderHotkeyList(); toast("已清除快捷键");
 }
 // 快捷键一览：先列自定义笔绑定，再列默认工具键（用户未占用时仍生效）
 const DEFAULT_HOTKEYS = [
@@ -661,6 +789,8 @@ function renderHotkeyList() {
   const custom = pens.map((p, i) => ({ p, i })).filter((x) => x.p.hotkey);
   const rows = custom.map((x) => `<div class="hk-line"><span class="hk-key">${hkLabel(x.p.hotkey)}</span><span class="hk-desc">${PEN_KINDS[x.p.kind] || "笔"} · ${x.p.color} · ${x.p.size}px</span></div>`);
   const used = new Set(custom.map((x) => x.p.hotkey));
+  // 自定义动作绑定
+  for (const a of ACTIONS) { const k = actionHotkeys[a.id]; if (!k) continue; used.add(k); rows.push(`<div class="hk-line"><span class="hk-key">${hkLabel(k)}</span><span class="hk-desc">动作 · ${a.label}</span></div>`); }
   for (const d of DEFAULT_HOTKEYS) {
     const dim = d.k.length === 1 && used.has(d.k.toLowerCase()) ? " unset" : "";
     rows.push(`<div class="hk-line"><span class="hk-key${dim}">${d.k}</span><span class="hk-desc">默认 · ${d.desc}${dim ? "（已被自定义占用）" : ""}</span></div>`);
@@ -699,6 +829,8 @@ function bindTopbar() {
   on("#btnAddPage", "click", () => addPage());
   on("#btnZoomFit", "click", fitToStage);
   on("#btnLocate", "click", fitToStage);
+  on("#btnResetView", "click", resetView);
+  on("#btnOverview", "click", toggleOverview);
   on("#nbTitle", "click", renameCurrent);
 }
 function bindDock() {
@@ -819,17 +951,26 @@ function bindDrawing() {
   ink.addEventListener("pointerup", onUp);
   ink.addEventListener("pointercancel", onUp);
   ink.addEventListener("pointerleave", () => { if (drawing && tool !== "eraser") onUp(); });
-  // Ctrl+滚轮缩放（围绕光标）；普通滚轮由 #stage 原生竖向滚动翻页
+  // Ctrl+滚轮缩放（围绕视口中心）；普通滚轮平移画布（竖向为主，Shift/横向分量走 panX）
   stage.addEventListener("wheel", (e) => {
-    if (e.ctrlKey) { e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.1 : 0.9)); }
+    if (e.ctrlKey) { e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.1 : 0.9)); return; }
+    e.preventDefault();
+    if (e.shiftKey) { panX -= e.deltaY + e.deltaX; }
+    else { panX -= e.deltaX; panY -= e.deltaY; }
+    applyTransform(); updateActivePageByPan();
   }, { passive: false });
-  stage.addEventListener("scroll", onStageScroll, { passive: true });
+  // 双击画布空白处（非绘制交互区）快速复位视图
+  stage.addEventListener("dblclick", (e) => { if (e.target === stage || e.target === pagesCol) resetView(); });
   bindTextLayer();
 }
 
 function onDown(e) {
   const pt = toLogical(e);
-  if (tool === "pan") { panning = true; panStart = { x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop }; ink.setPointerCapture(e.pointerId); return; }
+  // 平移起手：pan 工具 / 按住空格 / 鼠标中键，任何工具下都能自由平移画布
+  if (tool === "pan" || spaceDown || e.button === 1) {
+    panning = true; panStart = { x: e.clientX, y: e.clientY, px: panX, py: panY };
+    ink.setPointerCapture(e.pointerId); ink.style.cursor = "grabbing"; return;
+  }
   if (tool === "text") return; // 文本层处理
   ink.setPointerCapture(e.pointerId);
   if (tool === "lasso") {
@@ -849,7 +990,7 @@ function onDown(e) {
 }
 function onMove(e) {
   const pt = toLogical(e);
-  if (panning) { stage.scrollLeft = panStart.l - (e.clientX - panStart.x); stage.scrollTop = panStart.t - (e.clientY - panStart.y); return; }
+  if (panning) { panX = panStart.px + (e.clientX - panStart.x); panY = panStart.py + (e.clientY - panStart.y); applyTransform(); return; }
   if (tool === "lasso") {
     if (selGesture) { updateSelGesture(pt); return; }
     if (lassoPts) { lassoPts.push(pt); drawLasso(); }
@@ -863,7 +1004,7 @@ function onMove(e) {
   cur.points.push(pt); drawStrokeLive();
 }
 function onUp() {
-  if (panning) { panning = false; return; }
+  if (panning) { panning = false; ink.style.cursor = tool === "pan" ? "grab" : (spaceDown ? "grab" : (tool === "text" ? "text" : "crosshair")); updateActivePageByPan(); return; }
   if (tool === "lasso") {
     if (selGesture) { selGesture = null; save(); renderThumbs(); drawSelection(); return; }
     if (lassoPts && lassoPts.length > 2) finalizeLasso();
@@ -1738,7 +1879,7 @@ function bindPenMultiEditor() {
 }
 
 // ═══════════ 渲染 ═══════════
-function renderAll() { applyTransform(); drawPaper(); renderInk(); renderImages(); renderTexts(); renderCovers(); renderCards(); renderThumbs(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
+function renderAll() { applyTransform(); drawPaper(); renderInk(); renderImages(); renderTexts(); renderCovers(); renderCards(); renderThumbs(); updatePageIndicator(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
 function drawPaper() { pctx.clearRect(0, 0, PW, PH); paintTemplate(pctx, curPage()); }
 function renderInk() { ictx.clearRect(0, 0, PW, PH); for (const s of curPage().strokes) strokePath(ictx, s); }
 function renderThumbs() {
@@ -1770,6 +1911,16 @@ function bindThumbDrag(el, i) {
     const curId = curPage()?.id; pageIdx = nb.pages.findIndex((p) => p.id === curId);
     dragIdx = null; save(); buildPages(); renderAll(); renderThumbs();
   });
+}
+// 上一页 / 下一页：切活动页并平移到该页
+function prevPage() { if (nb && pageIdx > 0) gotoPage(pageIdx - 1); }
+function nextPage() { if (nb && pageIdx < nb.pages.length - 1) gotoPage(pageIdx + 1); }
+// 清空当前页笔迹（二次确认）
+async function clearPage() {
+  if (!nb) return;
+  const ok = await modalConfirm({ title: "清空当前页", desc: `第 ${pageIdx + 1} 页的所有笔迹将被清除，可用撤销恢复。`, okText: "清空", danger: true });
+  if (!ok) return;
+  pushUndo(); curPage().strokes = []; save(); renderInk(); renderThumbs(); toast("已清空当前页");
 }
 // 侧栏缩略图跳转：切换活动页并滚动定位
 function gotoPage(i) {
@@ -1806,11 +1957,18 @@ function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); cur
 
 function bindKeys() {
   window.addEventListener("keydown", (e) => {
-    // 快捷键捕获态：吞掉下一个可见单键作为当前笔的绑定（Esc 取消）
+    // 捕获态①：为某支笔绑键
     if (hkCapturing) {
       e.preventDefault();
       if (e.key === "Escape") { syncHotkeyUI(); return; }
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { setPenHotkey(e.key.toLowerCase()); }
+      return;
+    }
+    // 捕获态②：为某个动作绑键
+    if (hkCaptureAction) {
+      e.preventDefault();
+      if (e.key === "Escape") { hkCaptureAction = null; renderActionHotkeys(); return; }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { setActionHotkey(hkCaptureAction, e.key.toLowerCase()); }
       return;
     }
     if ($("#editor").classList.contains("hidden")) return;
@@ -1818,21 +1976,30 @@ function bindKeys() {
     // Esc：统一关闭当前打开的弹层/面板（即便在输入框内也允许）
     if (e.key === "Escape") { if (closeTopLayer()) { e.preventDefault(); return; } }
     if (editing) return;
+    // 空格按住 = 临时平移模式（非输入、非捕获态），把 ink 光标改为可抓取
+    if (e.key === " " && !spaceDown && !drawing) {
+      spaceDown = true; e.preventDefault();
+      if (!panning) ink.style.cursor = "grab";
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
     if ((e.key === "Delete" || e.key === "Backspace") && sel) { e.preventDefault(); deleteSelection(); return; }
-    // 方向键滚动画布
+    // 方向键平移画布（改 panX/panY，可越过原居中位置）
     const step = e.shiftKey ? 400 : 120;
-    if (e.key === "ArrowLeft") { e.preventDefault(); stage.scrollLeft -= step; return; }
-    if (e.key === "ArrowRight") { e.preventDefault(); stage.scrollLeft += step; return; }
-    if (e.key === "ArrowUp") { e.preventDefault(); stage.scrollTop -= step; return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); stage.scrollTop += step; return; }
+    if (e.key === "ArrowLeft") { e.preventDefault(); panX += step; applyTransform(); updateActivePageByPan(); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); panX -= step; applyTransform(); updateActivePageByPan(); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); panY += step; applyTransform(); updateActivePageByPan(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); panY -= step; applyTransform(); updateActivePageByPan(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    // ① 用户自定义快捷键优先：命中某支笔的 hotkey 即切到该笔
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // ① 自定义动作快捷键（最优先）
+    const act = ACTIONS.find((a) => actionHotkeys[a.id] === k);
+    if (act) { e.preventDefault(); act.run(); return; }
+    // ② 自定义笔快捷键
     const hi = pens.findIndex((p) => p.hotkey && p.hotkey === k);
     if (hi >= 0) { usePen(hi); return; }
-    // ② 默认绑定（用户未用该键自定义时才生效，向后兼容）
+    // ③ 默认绑定（该键未被任何自定义占用时才生效，向后兼容）
     if (isHotkeyFree("p") && e.key === "p") usePenTool("pen");
     else if (isHotkeyFree("h") && e.key === "h") usePenTool("highlighter");
     else if (isHotkeyFree("e") && e.key === "e") selectTool("eraser");
@@ -1840,13 +2007,17 @@ function bindKeys() {
     else if (isHotkeyFree("t") && e.key === "t") selectTool("text");
     else if (/^[1-9]$/.test(e.key) && isHotkeyFree(e.key) && pens[+e.key - 1]) usePen(+e.key - 1);
   });
+  // 空格松开：退出临时平移模式，恢复工具光标
+  window.addEventListener("keyup", (e) => {
+    if (e.key === " ") { spaceDown = false; if (!panning) ink.style.cursor = tool === "pan" ? "grab" : tool === "text" ? "text" : "crosshair"; }
+  });
 }
-// 该键是否未被任何笔自定义占用（默认绑定仅在空闲时生效）
-function isHotkeyFree(k) { return !pens.some((p) => p.hotkey === k); }
+// 该键是否未被任何笔或动作自定义占用（默认绑定仅在空闲时生效）
+function isHotkeyFree(k) { return !pens.some((p) => p.hotkey === k) && !Object.values(actionHotkeys).includes(k); }
 // Esc 关闭最上层弹层，返回是否关掉了某个层
 function closeTopLayer() {
-  const layers = ["#penMultiEditor", "#dockEditor", "#tplEditor", "#calcPanel", "#timerPanel", "#morePanel", "#sidebar"];
-  for (const s of layers) { const el = $(s); if (el && !el.classList.contains("hidden")) { el.classList.add("hidden"); hkCapturing = false; return true; } }
+  const layers = ["#actionHotkeyEditor", "#penMultiEditor", "#dockEditor", "#tplEditor", "#calcPanel", "#timerPanel", "#morePanel", "#sidebar"];
+  for (const s of layers) { const el = $(s); if (el && !el.classList.contains("hidden")) { el.classList.add("hidden"); hkCapturing = false; hkCaptureAction = null; return true; } }
   return false;
 }
 function usePenTool(t) { tool = t; selectTool(t); }
