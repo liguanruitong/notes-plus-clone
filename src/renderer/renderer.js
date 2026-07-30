@@ -1084,6 +1084,7 @@ function onMove(e) {
   cur.points.push(pt); drawStrokeLive();
 }
 function onUp() {
+  if (_liveRAF) { cancelAnimationFrame(_liveRAF); _liveRAF = 0; }
   if (panning) { panning = false; ink.style.cursor = tool === "pan" ? "grab" : (spaceDown ? "grab" : (tool === "text" ? "text" : "crosshair")); updateActivePageByPan(); return; }
   if (tool === "lasso") {
     if (selGesture) { selGesture = null; save(); renderThumbs(); drawSelection(); return; }
@@ -1115,22 +1116,12 @@ function pressureFactor(p, on, amt) {
   const pr = (typeof p === "number" && p > 0) ? p : 0.5;
   return 1 - amt + amt * pr * 2;
 }
-// 整条笔迹的基础透明度（不含压感）——半透明笔贴回主画布的那一次用它。
-function strokeBaseAlpha(s) {
-  return Math.max(0.02, Math.min(1, baseOpacity(s)));
-}
-// 向后兼容：旧代码部分地方还引用 strokeAlpha（如导出/缩略图），保留为“平均压感”版本。
+// 整条笔迹的有效透明度（压感-透明度按平均压感取值，避免逐段叠加变深）
 function strokeAlpha(s) {
   const on = s.pAlpha ?? false, amt = s.pAlphaAmt ?? 0.5;
   let p = 0.5;
   if (on && s.points.length) { let sum = 0; for (const q of s.points) sum += (q.p ?? 0.5); p = sum / s.points.length; }
   return Math.max(0.02, Math.min(1, baseOpacity(s) * pressureFactor(p, on, amt)));
-}
-// 某采样点的压感-透明度系数（0–1）。关（不用压感控透明）时恒为 1。
-function pointAlphaFactor(s, p) {
-  const on = s.pAlpha ?? false, amt = s.pAlphaAmt ?? 0.5;
-  if (!on) return 1;
-  return Math.max(0.04, Math.min(1, pressureFactor(p, on, amt)));
 }
 // 单点/单段的线宽（压感-粗细）
 function widthAt(s, p) {
@@ -1138,105 +1129,69 @@ function widthAt(s, p) {
   const on = s.pWidth ?? (s.tool !== "highlighter"), amt = s.pWidthAmt ?? 0.5;
   return Math.max(0.5, base * pressureFactor(p, on, amt));
 }
-// ═══════════ 笔迹渲染：真·逐点压感（同一笔画内粗细/透明度实时随压感变化）═══════════
-// 折线消除：以相邻采样点中点作 quadraticCurveTo 终点、原采样点作控制点，曲线穿过所有采样点。
-// 逐段用「相邻两点平均压感」设该段线宽 → 粗细在一笔之内实时变化。
-//
-// ⚠️ 半透明/压感透明的老难题：若逐段分别用 alpha<1 描边，相邻段在重叠处会叠加变深 →
-// 出现结节/圆圈/浓度不均。解法 = 离屏合成三步（getScratch 提供离屏画布）：
-//   ①在离屏 canvas 上以【不透明】逐段描边（per-段线宽）→ union 形状正确、绝不叠深；
-//   ②用 destination-in 再描一遍「per-段压感透明度」当遮罩 → 沿笔画产生真·逐点透明度变化，
-//     重叠处取遮罩 alpha（后写覆盖，非累加）→ 仍不叠深；
-//   ③把离屏结果一次性以【笔的基础透明度】(baseOpacity: 荧光笔0.35/普通笔1) 贴回主画布。
-// 结果：一笔之内粗细随压感变、透明度随压感变，且半透明重叠零结节。
-let _scratch = null, _scratchCtx = null;
-let _mask = null, _maskCtx = null;
-function getScratch(w, h) {
-  if (!_scratch) { _scratch = document.createElement("canvas"); _scratchCtx = _scratch.getContext("2d"); }
-  if (_scratch.width !== w || _scratch.height !== h) { _scratch.width = w; _scratch.height = h; }
-  _scratchCtx.setTransform(1, 0, 0, 1, 0, 0);
-  _scratchCtx.globalCompositeOperation = "source-over";
-  _scratchCtx.clearRect(0, 0, w, h);
-  return _scratchCtx;
-}
-function getMask(w, h) {
-  if (!_mask) { _mask = document.createElement("canvas"); _maskCtx = _mask.getContext("2d"); }
-  if (_mask.width !== w || _mask.height !== h) { _mask.width = w; _mask.height = h; }
-  _maskCtx.setTransform(1, 0, 0, 1, 0, 0);
-  _maskCtx.globalCompositeOperation = "source-over";
-  _maskCtx.clearRect(0, 0, w, h);
-  return _maskCtx;
-}
-const _mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-// 在给定 ctx 上逐段描边（per-段线宽），alphaFn(可选)返回该段透明度用于遮罩；
-// alphaFn 省略时全程不透明（用于离屏第①步的 union 形状）。
-function traceSegments(ctx, s, alphaFn) {
-  const pts = s.points;
-  ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = s.color;
+// 单条 stroke 画到 context —— 折线消除：以相邻采样点中点作 quadraticCurveTo 的终点、
+// 原采样点作控制点，曲线自然穿过所有原始采样点。不修改/不丢弃/不平均任何采样点坐标。
+// ⚠️ 半透明笔（荧光笔）必须整条路径【一次性描边】：若逐段分别 stroke，相邻段在重叠处
+// 会叠加多层半透明 → 出现一个个圆圈/结节、浓度不均。整条一次描边则半透明只叠一层，浓度均匀自然。
+function strokePath(ctx, s) {
+  const pts = s.points; if (!pts.length) return;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  const alpha = strokeAlpha(s);
+  ctx.globalAlpha = alpha; ctx.strokeStyle = s.color;
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   if (pts.length === 1) {
-    ctx.globalAlpha = alphaFn ? alphaFn(pts[0].p ?? 0.5) : 1;
     ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, widthAt(s, pts[0].p ?? 0.5) / 2, 0, Math.PI * 2);
-    ctx.fillStyle = s.color; ctx.fill(); return;
+    ctx.fillStyle = s.color; ctx.fill(); ctx.globalAlpha = 1; return;
   }
+  // 半透明笔（荧光笔）：恒定线宽 + 整条路径一次性 stroke，浓度均匀无结节。
+  if (alpha < 0.999) {
+    // 线宽取整条平均压感（半透明笔通常粗细均匀，避免逐段变宽产生台阶）
+    let pSum = 0; for (const p of pts) pSum += (p.p ?? 0.5);
+    ctx.lineWidth = widthAt(s, pSum / pts.length);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    if (pts.length === 2) {
+      ctx.lineTo(pts[1].x, pts[1].y);
+    } else {
+      for (let i = 1; i < pts.length - 1; i++) {
+        const cm = mid(pts[i], pts[i + 1]);
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, cm.x, cm.y);
+      }
+      ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1; return;
+  }
+  // 不透明笔：逐段二次贝塞尔，每段用相邻两点平均压感设线宽，保留压感粗细变化。
   if (pts.length === 2) {
-    const pm = ((pts[0].p ?? 0.5) + (pts[1].p ?? 0.5)) / 2;
-    ctx.globalAlpha = alphaFn ? alphaFn(pm) : 1;
-    ctx.lineWidth = widthAt(s, pm);
-    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); ctx.stroke(); return;
+    ctx.beginPath(); ctx.lineWidth = widthAt(s, ((pts[0].p ?? 0.5) + (pts[1].p ?? 0.5)) / 2);
+    ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); ctx.stroke();
+    ctx.globalAlpha = 1; return;
   }
   let prevMid = pts[0];
   for (let i = 1; i < pts.length; i++) {
-    const curMid = i < pts.length - 1 ? _mid(pts[i], pts[i + 1]) : pts[pts.length - 1];
-    const pm = ((pts[i - 1].p ?? 0.5) + (pts[i].p ?? 0.5)) / 2;
-    ctx.globalAlpha = alphaFn ? alphaFn(pm) : 1;
-    ctx.lineWidth = widthAt(s, pm);
+    const curMid = i < pts.length - 1 ? mid(pts[i], pts[i + 1]) : pts[pts.length - 1];
     ctx.beginPath();
+    ctx.lineWidth = widthAt(s, ((pts[i - 1].p ?? 0.5) + (pts[i].p ?? 0.5)) / 2);
     ctx.moveTo(prevMid.x, prevMid.y);
     ctx.quadraticCurveTo(pts[i].x, pts[i].y, curMid.x, curMid.y);
     ctx.stroke();
     prevMid = curMid;
   }
+  ctx.globalAlpha = 1;
 }
-function strokePath(ctx, s) {
-  const pts = s.points; if (!pts.length) return;
-  const base = strokeBaseAlpha(s);            // 笔的基础透明度（不含压感）
-  const alphaOn = s.pAlpha ?? false;          // 是否用压感控制透明度
-  const semi = base < 0.999;                  // 半透明笔（如荧光笔）
-  // 简单情形：不透明 + 不用压感透明度 → 直接主画布逐段描边（最省，无需离屏）。
-  if (!semi && !alphaOn) {
-    ctx.globalAlpha = 1;
-    traceSegments(ctx, s, null);
-    ctx.globalAlpha = 1; return;
-  }
-  // 复杂情形：半透明 或 压感透明度开 → 离屏合成，杜绝重叠叠深、实现逐点透明度。
-  const g = getScratch(ctx.canvas.width, ctx.canvas.height);
-  // ① 不透明 union（per-段线宽）
-  g.globalCompositeOperation = "source-over";
-  traceSegments(g, s, null);
-  // ② 若开压感透明度：先在独立 mask 画布上把【整条】per-段压感透明度画好(source-over)，
-  //   再用【一次】destination-in drawImage 把遮罩整体应用到 union。
-  //   关键：destination-in 必须一次性施加——若逐段分别 destination-in，后一段会把前段保留的擦掉。
-  if (alphaOn) {
-    const mctx = getMask(ctx.canvas.width, ctx.canvas.height);
-    mctx.globalCompositeOperation = "source-over";
-    traceSegments(mctx, s, (p) => pointAlphaFactor(s, p));
-    mctx.globalAlpha = 1;
-    g.globalCompositeOperation = "destination-in";
-    g.globalAlpha = 1;
-    g.drawImage(_mask, 0, 0);
-    g.globalCompositeOperation = "source-over";
-  }
-  // ③ 一次性以基础透明度贴回主画布
-  const prevA = ctx.globalAlpha;
-  ctx.globalAlpha = base;
-  ctx.drawImage(_scratch, 0, 0);
-  ctx.globalAlpha = prevA;
-  g.globalAlpha = 1;
-}
-function drawStrokeLive() {
+// 实时绘制用 requestAnimationFrame 合并：一帧内多个 pointermove 只重绘一次，
+// 避免高采样率手写笔(120+ evt/s)每个事件都全页重绘导致的延迟/卡顿。
+let _liveRAF = 0;
+function renderLiveNow() {
+  _liveRAF = 0;
   ictx.clearRect(0, 0, PW, PH);
   for (const s of curPage().strokes) strokePath(ictx, s);
   if (cur) strokePath(ictx, cur);
+}
+function drawStrokeLive() {
+  if (_liveRAF) return;               // 本帧已排队，合并
+  _liveRAF = requestAnimationFrame(renderLiveNow);
 }
 let erasedThisStroke = false;
 // 点到线段最近距离（用于精准判断笔画是否被橡皮碰到）
@@ -2747,21 +2702,18 @@ window.__np_smoothProbe = () => {
   return { usedQuadratic: calls.includes("quadraticCurveTo"), usedLineTo: calls.includes("lineTo"), calls };
 };
 // 荧光笔/压感透明渲染探针（v1.8.2 重写）：新设计下，半透明笔逐段描到离屏 canvas（per-段线宽/压感），
-// 再以基础透明度【一次 drawImage】贴回主画布 → 主画布上只叠一层，无结节/圆圈。
-// 旧断言“只能 stroke 一次”已废弃；新不变量 = 向主画布恰好一次 drawImage。
+// 荧光笔（半透明）渲染探针：对多采样点的半透明 highlighter stroke，strokePath 应只调用一次 stroke()
 window.__np_hlStrokeProbe = () => {
-  let drawImageCount = 0, blitAlpha = -1;
-  const rec = new Proxy({ canvas: { width: 1240, height: 1754 } }, { get: (_t, k) => {
-    if (k === "canvas") return { width: 1240, height: 1754 };
-    if (["lineJoin","lineCap","strokeStyle","fillStyle","lineWidth","globalCompositeOperation"].includes(k)) return undefined;
-    if (k === "globalAlpha") return rec.__ga;
-    return (...a) => { if (k === "drawImage") { drawImageCount++; blitAlpha = rec.__ga; } };
-  }, set: (_t, k, v) => { if (k === "globalAlpha") rec.__ga = v; return true; } });
+  let strokeCount = 0, beginCount = 0;
+  const rec = new Proxy({}, { get: (_t, k) => {
+    if (["lineJoin","lineCap","strokeStyle","fillStyle","globalAlpha","lineWidth"].includes(k)) return undefined;
+    return (...a) => { if (k === "stroke") strokeCount++; if (k === "beginPath") beginCount++; };
+  }, set: () => true });
   // opacity=0.35 半透明 + 8 个采样点
   const s = { tool: "highlighter", kind: "highlighter", color: "#ffd60a", size: 16, opacity: 0.35,
     points: Array.from({length:8}, (_,i)=>({x:i*20, y:(i%2)*30, p:.5})) };
   strokePath(rec, s);
-  return { drawImageCount, blitAlpha: Math.round((blitAlpha ?? -1) * 100) / 100, baseAlpha: strokeBaseAlpha(s) };
+  return { strokeCount, beginCount, alpha: strokeAlpha(s) };
 };
 
 init();
