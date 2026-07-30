@@ -2205,24 +2205,31 @@ function bindDivider(el) {
 // 本实例真正落盘后广播；其它同源实例若正看同一本笔记则近实时刷新。
 let lastSelfSaveTs = 0;
 function broadcastSaved() { lastSelfSaveTs = Date.now(); try { bc.postMessage({ type: "saved", nbId: nb ? nb.id : null, from: paneSelf }); } catch {} }
-// 是否正处于不宜打断的交互（书写/平移/套索/选区手势/文本编辑）
+// 是否需要跨实例同步：只有真正分屏时（左侧已开分屏，或自己是被嵌入的右侧实例）才需要。
+// 单窗口下彻底不响应任何「拉取磁盘覆盖内存」的刷新，从根上杜绝自毁式笔画丢失。
+function syncActive() { return splitOn || paneMode === "right"; }
+// 是否正处于不宜打断/不宜被磁盘旧数据覆盖的状态。
+// 关键：dirty = 内存里有改动但还没落盘完成（save() 的 400ms 防抖窗口 / saveNow 进行中）。
+// 在这段时间里绝不能用磁盘旧数据 pullAndRefresh 覆盖，否则刚写的笔画会消失。
 function syncBusy() {
   const ed = document.activeElement;
   const editingText = ed && (ed.classList?.contains("text-box") || ed.classList?.contains("card-body"));
-  return drawing || panning || lassoPts || selGesture || editingText;
+  return drawing || panning || lassoPts || selGesture || editingText || dirty;
 }
 function bindSync() {
   bc.onmessage = (e) => {
     const m = e.data;
     if (!m || m.type !== "saved") return;
     if (m.from === paneSelf) return;                 // 自己发的忽略
+    if (!syncActive()) return;                       // 单窗口不分屏 → 不需跨实例同步，彻底不刷（防自毁）
     if (!nb || m.nbId !== nb.id) return;             // 不是当前这本忽略（不同笔记天然隔离）
-    if (syncBusy()) { pendingSync = nb.id; return; } // 正在书写/编辑 → 延迟到抬手后
+    if (syncBusy()) { pendingSync = nb.id; return; } // 正在书写/编辑/未落盘 → 延迟到抬手后
     pullAndRefresh(nb.id);
   };
   // 主进程广播兜底（跨窗口）。注意：iframe 与主页面同属一个 webContents，广播会回到
   // 自己这一侧 → 用刚落盘的时间戳过滤掉自触发（否则每一笔都自刷）。
   if (window.api.onNotebooksUpdated) window.api.onNotebooksUpdated(() => {
+    if (!syncActive()) return;                       // 单窗口不刷（根治无故自毁）
     if (Date.now() - lastSelfSaveTs < 600) return;   // 自己刚存的回声，跳过
     if (!nb || syncBusy()) { if (nb) pendingSync = nb.id; return; }
     pullAndRefresh(nb.id);
@@ -2234,6 +2241,8 @@ function bindSync() {
 }
 // 从主进程重新拉取指定笔记的最新数据并刷新当前显示
 async function pullAndRefresh(nbId) {
+  if (!syncActive()) return;                         // 单窗口绝不拉取覆盖（双保险）
+  if (syncBusy()) { pendingSync = nbId; return; }     // 还有未落盘改动/正在交互 → 绝不用旧数据覆盖，改抬手后补刷
   const fresh = await window.api.getState();
   const updated = fresh.notebooks.find((n) => n.id === nbId);
   if (!updated) return;
@@ -2252,8 +2261,19 @@ function flushPendingSync() { if (pendingSync && !syncBusy()) { const id = pendi
 
 // ═══════════ 持久化 ═══════════
 let saveTimer;
-function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => window.api.saveNotebooks(state.notebooks).then(broadcastSaved), 400); }
-function saveNow() { clearTimeout(saveTimer); return window.api.saveNotebooks(state.notebooks).then((r) => { broadcastSaved(); return r; }); }
+let dirty = false;   // 内存有改动但尚未落盘完成 → 不得被磁盘旧数据覆盖
+function save() {
+  dirty = true;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    window.api.saveNotebooks(state.notebooks).then(() => { dirty = false; broadcastSaved(); });
+  }, 400);
+}
+function saveNow() {
+  dirty = true;
+  clearTimeout(saveTimer);
+  return window.api.saveNotebooks(state.notebooks).then((r) => { dirty = false; broadcastSaved(); return r; });
+}
 
 // ═══════════ busy / 合成 ═══════════
 function busy(on, text) { const b = $("#busy"); if (text) $("#busyText").textContent = text; b.classList.toggle("hidden", !on); }
