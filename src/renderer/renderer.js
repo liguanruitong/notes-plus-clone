@@ -1129,23 +1129,127 @@ function widthAt(s, p) {
   const on = s.pWidth ?? (s.tool !== "highlighter"), amt = s.pWidthAmt ?? 0.5;
   return Math.max(0.5, base * pressureFactor(p, on, amt));
 }
-// 单条 stroke 画到 context —— 折线消除：以相邻采样点中点作 quadraticCurveTo 的终点、
-// 原采样点作控制点，曲线自然穿过所有原始采样点。不修改/不丢弃/不平均任何采样点坐标。
-// ⚠️ 半透明笔（荧光笔）必须整条路径【一次性描边】：若逐段分别 stroke，相邻段在重叠处
-// 会叠加多层半透明 → 出现一个个圆圈/结节、浓度不均。整条一次描边则半透明只叠一层，浓度均匀自然。
+// 某采样点的压感-透明度系数（0–1）。关（不用压感控透明）时恒为 1。
+function pointAlphaFactor(s, p) {
+  const on = s.pAlpha ?? false, amt = s.pAlphaAmt ?? 0.5;
+  if (!on) return 1;
+  return Math.max(0.04, Math.min(1, pressureFactor(p, on, amt)));
+}
+// ══════════ 笔迹渲染 ══════════
+// 三条路径：
+//  A. 不透明 + 不用压感透明度 → 主画布逐段贝塞尔描边(per段线宽)，最省，跟手最快。
+//  B. 用压感控透明度(pAlpha) → 真·浓淡渐变：离屏「印章(stamp)」笔刷 + lighten 取最大合成，
+//     同一笔内浓淡随压感连续变化，且重叠处取最大 alpha(非累加)绝不叠深；整条画完一次性上色贴回。
+//  C. 半透明笔(荧光笔, alpha<1 但不用压感透明) → 整条一次性描边，浓度均匀无结节。
+//
+// 折线消除：相邻采样点中点作 quadraticCurveTo 终点、原采样点作控制点，曲线穿过所有采样点。
+let _scratch = null, _sctx = null;   // 离屏灰度强度层（存 alpha 强度场）
+function getScratch(w, h) {
+  if (!_scratch) { _scratch = document.createElement("canvas"); _sctx = _scratch.getContext("2d"); }
+  if (_scratch.width !== w || _scratch.height !== h) { _scratch.width = w; _scratch.height = h; }
+  _sctx.setTransform(1, 0, 0, 1, 0, 0);
+  _sctx.globalCompositeOperation = "source-over";
+  _sctx.globalAlpha = 1;
+  _sctx.clearRect(0, 0, w, h);
+  return _sctx;
+}
+const _mid2 = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+// 沿路径密集重采样：把稀疏采样点插值成间距≈step的连续点（含插值压感），用于印章铺设。
+function densifyStroke(pts, step) {
+  if (pts.length <= 1) return pts.slice();
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.hypot(dx, dy);
+    const n = Math.max(1, Math.ceil(d / step));
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      out.push({ x: a.x + dx * t, y: a.y + dy * t, p: (a.p ?? 0.5) + ((b.p ?? 0.5) - (a.p ?? 0.5)) * t });
+    }
+  }
+  return out;
+}
+// 真·浓淡渐变笔（压感控透明度）：印章 + lighten 取「最大强度」+ 一次上色贴回。
+// 关键难点=同一笔自重叠不能叠深。解法：把「强度」编码成【灰度亮度】而非 canvas alpha——
+// 离屏铺【不透明】印章(黑底上画白，白的浓度=该点压感透明度)，composite=lighten →
+// 重叠处取「最大亮度」，绝不累加(因为全程不透明，alpha 不参与累加)。整条铺完后把
+// 亮度场转成 alpha 并染成笔色，一次性贴回主画布 → 浓淡随压感连续变化、重叠零叠深。
+function strokePathGradient(ctx, s) {
+  const pts = s.points; if (!pts.length) return;
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  const g = getScratch(W, H);
+  // ① 黑底（不透明）——lighten 的基准，任何白印章都比它亮。
+  g.globalCompositeOperation = "source-over";
+  g.globalAlpha = 1;
+  g.fillStyle = "#000000";
+  g.fillRect(0, 0, W, H);
+  // ② 白色印章，亮度=压感透明度系数；composite=lighten 取最大亮度（不累加）。
+  g.globalCompositeOperation = "lighten";
+  const soft = (s.tool === "highlighter");
+  // 浓淡强度曲线：把压感映射到较宽的可见区间(faint≈0.12 → bold=1.0)，
+  // amt 控制响应强度(0=整条恒定基础浓度, 1=完全跟压感)。这样才有 iPad 那种明显浓→淡。
+  const amt = s.pAlphaAmt ?? 0.5;
+  const gAlpha = (pr) => {
+    const p = (typeof pr === "number" && pr > 0) ? Math.min(1, pr) : 0.5;
+    const curve = 0.10 + 0.90 * Math.pow(p, 1.6);   // 低压更透、高压满浓，可见浓淡
+    return Math.max(0.06, Math.min(1, (1 - amt) + amt * curve));
+  };
+  // 实心圆印章(无径向淡出)：相邻圆union出平滑轮廓，lighten 下每像素取覆盖它的所有圆中
+  // 最亮者(=最大强度)，既平滑又不叠深。间距足够细(<=0.35r)让轮廓连续无扇贝。
+  g.lineJoin = g.lineCap = "round";
+  const step = Math.max(0.35, widthAt(s, 0.5) * 0.15);
+  const dp = densifyStroke(pts, step);
+  for (const q of dp) {
+    const r = Math.max(0.5, widthAt(s, q.p ?? 0.5) / 2);
+    const c = Math.round(gAlpha(q.p ?? 0.5) * 255);
+    g.globalAlpha = 1;
+    g.fillStyle = "rgb(" + c + "," + c + "," + c + ")";
+    g.beginPath(); g.arc(q.x, q.y, r, 0, Math.PI * 2); g.fill();
+  }
+  // ③ 亮度场 → RGBA：alpha=亮度，颜色=笔色。逐像素改（只对本条笔画外接盒范围，省成本）。
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9, pad = 0;
+  for (const q of pts) {
+    const r = widthAt(s, q.p ?? 0.5) / 2 + 2; pad = Math.max(pad, r);
+    if (q.x < minX) minX = q.x; if (q.y < minY) minY = q.y;
+    if (q.x > maxX) maxX = q.x; if (q.y > maxY) maxY = q.y;
+  }
+  const bx = Math.max(0, Math.floor(minX - pad)), by = Math.max(0, Math.floor(minY - pad));
+  const bw = Math.min(W, Math.ceil(maxX + pad)) - bx, bh = Math.min(H, Math.ceil(maxY + pad)) - by;
+  if (bw <= 0 || bh <= 0) return;
+  const img = g.getImageData(bx, by, bw, bh);
+  const d = img.data;
+  const cr = parseInt(s.color.slice(1, 3), 16) || 0;
+  const cg = parseInt(s.color.slice(3, 5), 16) || 0;
+  const cb = parseInt(s.color.slice(5, 7), 16) || 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = d[i];              // 灰度亮度(R=G=B)=强度
+    d[i] = cr; d[i + 1] = cg; d[i + 2] = cb; d[i + 3] = lum;
+  }
+  g.putImageData(img, bx, by);
+  // ④ 以笔的基础透明度一次性贴回。
+  const prevA = ctx.globalAlpha;
+  ctx.globalAlpha = Math.max(0.02, Math.min(1, baseOpacity(s)));
+  ctx.drawImage(_scratch, bx, by, bw, bh, bx, by, bw, bh);
+  ctx.globalAlpha = prevA;
+}
 function strokePath(ctx, s) {
   const pts = s.points; if (!pts.length) return;
+  const base = Math.max(0.02, Math.min(1, baseOpacity(s)));
+  const alphaOn = s.pAlpha ?? false;
+  // 路径 B：压感控透明度 → 真·浓淡渐变（印章合成）
+  if (alphaOn) { strokePathGradient(ctx, s); return; }
   ctx.lineJoin = "round"; ctx.lineCap = "round";
-  const alpha = strokeAlpha(s);
-  ctx.globalAlpha = alpha; ctx.strokeStyle = s.color;
+  ctx.strokeStyle = s.color;
   const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   if (pts.length === 1) {
+    ctx.globalAlpha = base;
     ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, widthAt(s, pts[0].p ?? 0.5) / 2, 0, Math.PI * 2);
     ctx.fillStyle = s.color; ctx.fill(); ctx.globalAlpha = 1; return;
   }
-  // 半透明笔（荧光笔）：恒定线宽 + 整条路径一次性 stroke，浓度均匀无结节。
-  if (alpha < 0.999) {
-    // 线宽取整条平均压感（半透明笔通常粗细均匀，避免逐段变宽产生台阶）
+  // 路径 C：半透明笔（荧光笔，不用压感透明）→ 恒定线宽 + 整条一次性描边，浓度均匀无结节。
+  if (base < 0.999) {
+    ctx.globalAlpha = base;
     let pSum = 0; for (const p of pts) pSum += (p.p ?? 0.5);
     ctx.lineWidth = widthAt(s, pSum / pts.length);
     ctx.beginPath();
@@ -1162,7 +1266,8 @@ function strokePath(ctx, s) {
     ctx.stroke();
     ctx.globalAlpha = 1; return;
   }
-  // 不透明笔：逐段二次贝塞尔，每段用相邻两点平均压感设线宽，保留压感粗细变化。
+  // 路径 A：不透明笔（不用压感透明）→ 逐段二次贝塞尔，每段用相邻两点平均压感设线宽，保留压感粗细。
+  ctx.globalAlpha = 1;
   if (pts.length === 2) {
     ctx.beginPath(); ctx.lineWidth = widthAt(s, ((pts[0].p ?? 0.5) + (pts[1].p ?? 0.5)) / 2);
     ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); ctx.stroke();
@@ -1180,14 +1285,27 @@ function strokePath(ctx, s) {
   }
   ctx.globalAlpha = 1;
 }
+
 // 实时绘制用 requestAnimationFrame 合并：一帧内多个 pointermove 只重绘一次，
 // 避免高采样率手写笔(120+ evt/s)每个事件都全页重绘导致的延迟/卡顿。
 let _liveRAF = 0;
+// 实时绘制缓存：已提交笔画静态，缓存到离屏 canvas，实时只重画当前这一笔，
+// 大幅降多笔画页面的实时重绘成本(渐变笔用了 getImageData，尤需)。
+let _inkCache = null, _inkCacheCtx = null, _inkCacheDirty = true;
+function markInkCacheDirty() { _inkCacheDirty = true; }
+function buildInkCache() {
+  if (!_inkCache) { _inkCache = document.createElement("canvas"); _inkCacheCtx = _inkCache.getContext("2d"); }
+  if (_inkCache.width !== PW || _inkCache.height !== PH) { _inkCache.width = PW; _inkCache.height = PH; }
+  _inkCacheCtx.clearRect(0, 0, PW, PH);
+  for (const s of curPage().strokes) strokePath(_inkCacheCtx, s);
+  _inkCacheDirty = false;
+}
 function renderLiveNow() {
   _liveRAF = 0;
+  if (_inkCacheDirty) buildInkCache();
   ictx.clearRect(0, 0, PW, PH);
-  for (const s of curPage().strokes) strokePath(ictx, s);
-  if (cur) strokePath(ictx, cur);
+  ictx.drawImage(_inkCache, 0, 0);        // 已提交笔画(缓存)
+  if (cur) strokePath(ictx, cur);         // 只实时重画当前这一笔
 }
 function drawStrokeLive() {
   if (_liveRAF) return;               // 本帧已排队，合并
@@ -1997,7 +2115,7 @@ function bindPenMultiEditor() {
 // ═══════════ 渲染 ═══════════
 function renderAll() { applyTransform(); drawPaper(); renderInk(); renderImages(); renderTexts(); renderCovers(); renderCards(); renderThumbs(); updatePageIndicator(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
 function drawPaper() { pctx.clearRect(0, 0, PW, PH); paintTemplate(pctx, curPage()); }
-function renderInk() { ictx.clearRect(0, 0, PW, PH); for (const s of curPage().strokes) strokePath(ictx, s); }
+function renderInk() { markInkCacheDirty(); ictx.clearRect(0, 0, PW, PH); for (const s of curPage().strokes) strokePath(ictx, s); }
 function renderThumbs() {
   if ($("#sidebar").classList.contains("hidden") || drawerMode !== "pages") return;
   const list = $("#pageList");
