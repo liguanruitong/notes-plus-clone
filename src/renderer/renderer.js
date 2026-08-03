@@ -1250,6 +1250,74 @@ function strokePathGradient(ctx, s) {
   ctx.drawImage(_scratch, bx, by, bw, bh, bx, by, bw, bh);
   ctx.globalAlpha = prevA;
 }
+// 实时版印章渐变：视觉与 strokePathGradient 完全一致（同曲线/step/lighten 取最大不叠深），
+// 但【增量渲染】——跨帧保留灰度强度层，每帧只补画「新增采样点」的印章、只重算新增尾段外接盒
+// 的上色，再整层贴回。lighten 取最大值幂等且可交换，故增量结果==一次性铺满，逐像素一致。
+// 于是单帧成本随「本帧新增点」而非笔画总长，写超长笔画也不卡（点是逐帧到达的）。
+let _liveG = null, _liveGCtx = null, _liveGColored = null, _liveGCCtx = null, _liveGStroke = null, _liveGDone = 0;
+function strokePathGradientLive(ctx, s) {
+  const pts = s.points; if (!pts.length) return;
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  // 换笔 / 点数回退(撤销) / 尺寸变化 → 重建灰度层与上色层，从头累积。
+  if (_liveGStroke !== s || pts.length < _liveGDone || !_liveG || _liveG.width !== W || _liveG.height !== H) {
+    if (!_liveG) {
+      _liveG = document.createElement("canvas"); _liveGCtx = _liveG.getContext("2d", { willReadFrequently: true });
+      _liveGColored = document.createElement("canvas"); _liveGCCtx = _liveGColored.getContext("2d");
+    }
+    if (_liveG.width !== W || _liveG.height !== H) { _liveG.width = W; _liveG.height = H; _liveGColored.width = W; _liveGColored.height = H; }
+    _liveGCtx.setTransform(1, 0, 0, 1, 0, 0); _liveGCtx.globalCompositeOperation = "source-over"; _liveGCtx.globalAlpha = 1;
+    _liveGCtx.fillStyle = "#000000"; _liveGCtx.fillRect(0, 0, W, H);   // 黑底：lighten 基准
+    _liveGCCtx.clearRect(0, 0, W, H);
+    _liveGStroke = s; _liveGDone = 0;
+  }
+  // ① 只补画新增点的印章（与 strokePathGradient 完全相同的曲线/step/半径）。
+  const amt = s.pAlphaAmt ?? 0.5;
+  const gAlpha = (pr) => {
+    const p = (typeof pr === "number" && pr > 0) ? Math.min(1, pr) : 0.5;
+    const curve = 0.10 + 0.90 * Math.pow(p, 1.6);
+    return Math.max(0.06, Math.min(1, (1 - amt) + amt * curve));
+  };
+  const step = Math.max(0.35, widthAt(s, 0.5) * 0.15);
+  const start = Math.max(0, _liveGDone - 1);        // 重叠上一已画点，桥接该段
+  const tail = pts.slice(start);
+  const dp = densifyStroke(tail, step);
+  const g = _liveGCtx;
+  g.globalCompositeOperation = "lighten";
+  g.lineJoin = g.lineCap = "round";
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9, pad = 0;
+  // dp[0] 是上一帧已画的重叠锚点(仅用于桥接插值)：start>0 时不能重画——lighten 对
+  // 抗锯齿边缘像素重复叠画会让其亮度逐帧向满值蠕升(incr 偏高)，跳过它才与一次性铺满逐像素一致。
+  for (let idx = start > 0 ? 1 : 0; idx < dp.length; idx++) {
+    const q = dp[idx];
+    const r = Math.max(0.5, widthAt(s, q.p ?? 0.5) / 2);
+    const c = Math.round(gAlpha(q.p ?? 0.5) * 255);
+    g.globalAlpha = 1;
+    g.fillStyle = "rgb(" + c + "," + c + "," + c + ")";
+    g.beginPath(); g.arc(q.x, q.y, r, 0, Math.PI * 2); g.fill();
+    pad = Math.max(pad, r + 2);                       // 外接盒从实际画了印章的点算，覆盖全部被提亮像素
+    if (q.x < minX) minX = q.x; if (q.y < minY) minY = q.y;
+    if (q.x > maxX) maxX = q.x; if (q.y > maxY) maxY = q.y;
+  }
+  _liveGDone = pts.length;
+  // ② 只把新增尾段外接盒重新上色（灰度亮度→alpha，染成笔色）贴进上色层。
+  //    新印章只影响此盒内像素，盒外像素上一帧已上过色、原样保留 → 结果与整条重算一致。
+  const bx = Math.max(0, Math.floor(minX - pad)), by = Math.max(0, Math.floor(minY - pad));
+  const bw = Math.min(W, Math.ceil(maxX + pad)) - bx, bh = Math.min(H, Math.ceil(maxY + pad)) - by;
+  if (bw > 0 && bh > 0) {
+    const img = g.getImageData(bx, by, bw, bh);
+    const d = img.data;
+    const cr = parseInt(s.color.slice(1, 3), 16) || 0;
+    const cg = parseInt(s.color.slice(3, 5), 16) || 0;
+    const cb = parseInt(s.color.slice(5, 7), 16) || 0;
+    for (let i = 0; i < d.length; i += 4) { const lum = d[i]; d[i] = cr; d[i + 1] = cg; d[i + 2] = cb; d[i + 3] = lum; }
+    _liveGCCtx.putImageData(img, bx, by);
+  }
+  // ③ 以笔的基础透明度整层贴回主画布（drawImage 走 GPU，成本恒定极低）。
+  const prevA = ctx.globalAlpha;
+  ctx.globalAlpha = Math.max(0.02, Math.min(1, baseOpacity(s)));
+  ctx.drawImage(_liveGColored, 0, 0);
+  ctx.globalAlpha = prevA;
+}
 function strokePath(ctx, s) {
   const pts = s.points; if (!pts.length) return;
   const base = Math.max(0.02, Math.min(1, baseOpacity(s)));
@@ -1364,7 +1432,12 @@ function renderLiveNow() {
   if (_inkCacheDirty) buildInkCache();
   ictx.clearRect(0, 0, PW, PH);
   ictx.drawImage(_inkCache, 0, 0);        // 已提交笔画(缓存)
-  if (cur) strokePathLive(ictx, cur);     // 只实时重画当前这一笔（轻量描边，不卡）
+  if (cur) {
+    // pAlpha 开时走和最终一致的印章渐变(所见即所得)；关时用轻量描边(最省最跟手)。
+    // gradient 只处理当前这一笔、getImageData 仅取其外接盒，单帧成本低不卡。
+    if (cur.pAlpha) strokePathGradientLive(ictx, cur);
+    else strokePathLive(ictx, cur);
+  }
 }
 function drawStrokeLive() {
   if (_liveRAF) return;               // 本帧已排队，合并
