@@ -936,13 +936,17 @@ function selectTool(t) {
   }
   textLayer.style.pointerEvents = t === "text" ? "auto" : "none";
   // 图片对象仅在套索工具下可选中/拖动/缩放，其余工具可在图片上正常书写
-  const il = $("#imageLayer"); if (il) { il.classList.toggle("interactive", t === "lasso"); if (t !== "lasso") $$("#imageLayer .img-obj.selected").forEach((el) => el.classList.remove("selected")); }
+  const il = $("#imageLayer"); if (il) { il.classList.toggle("interactive", t === "lasso"); il.classList.toggle("lassoTop", t === "lasso"); if (t !== "lasso") $$("#imageLayer .img-obj.selected").forEach((el) => el.classList.remove("selected")); }
   // 卡片：文本/套索工具下可拖动/编辑/改大小；笔/荧光笔/橡皮等绘图工具下卡片不拦指针
   // → 笔画直接落到 ink 画布（ink 已提到卡片上方，墨迹显在卡片上面）→ 可以在卡片上手写。
   const clInteractive = (t === "text" || t === "lasso");
-  const cl = $("#cardLayer"); if (cl) cl.classList.toggle("interactive", clInteractive);
-  // 文本/套索工具下 ink 让出指针，下层 DOM（卡片/文本/图片）才能被拖拽/编辑。
-  ink.classList.toggle("passthru", clInteractive);
+  const cl = $("#cardLayer"); if (cl) { cl.classList.toggle("interactive", clInteractive); cl.classList.toggle("lassoTop", t === "lasso"); }
+  // 文本工具下 ink 让出指针，下层文本层才能编辑。
+  // ⚠️ 套索工具「不」让 ink 让出指针：套索的框选手势(onDown/onMove)绑在 ink 上，
+  //    若 ink passthru 则事件穿透、套索点了没反应(v1.9.1 回归 bug)。改为把卡片/图片层
+  //    提到 ink 上方(.lassoTop z-index:13)——点卡片/图片时它们(元素级 pointer-events:auto)先接管
+  //    可拖拽；点空白处事件落到下方 ink → 走套索选笔。二者兼得。
+  ink.classList.toggle("passthru", t === "text");
   ink.style.cursor = t === "pan" ? "grab" : t === "text" ? "text" : "crosshair";
   syncToolGrid();
   persistSettings();
