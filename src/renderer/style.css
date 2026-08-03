@@ -182,12 +182,15 @@ body.pane-right #splitWrap { inset: 48px 0 0 0; }
 /* 画布：可交互的「活动页」栈，绝对定位浮在当前页槽之上 */
 #canvasWrap { position: absolute; top: 0; left: 0; z-index: 10; background: var(--paper); }
 #canvasWrap canvas { position: absolute; top: 0; left: 0; display: block; touch-action: none; }
-/* ★ BUG1 修复：只有 #ink 接收绘制事件；paper/overlay 均 pointer-events:none */
+/* ★ BUG1 修复：只有 #ink 接收绘制事件；paper/overlay 均 pointer-events:none。
+   ★ v1.9.1：ink/overlay 提到卡片/文本层之上，让手写墨迹显在卡片上方（可见）；
+   文本/套索工具下把 #ink 设为 pointer-events:none，让下层卡片/文本可拖拽编辑。 */
 #paper   { z-index: 0; pointer-events: none; }
-#ink     { z-index: 3; }
-#overlay { z-index: 5; pointer-events: none; }
+#ink     { z-index: 12; }
+#ink.passthru { pointer-events: none; }
+#overlay { z-index: 13; pointer-events: none; }
 #textLayer { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
-#coverLayer { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
+#coverLayer { position: absolute; inset: 0; z-index: 14; pointer-events: none; }
 #cardLayer { position: absolute; inset: 0; z-index: 8; pointer-events: none; }
 
 /* 挖空笔遮挡块：合上=不透明色块盖住；打开=半透明露出内容 */
@@ -199,16 +202,19 @@ body.pane-right #splitWrap { inset: 48px 0 0 0; }
 .cover-box:hover .cover-del { opacity: 1; }
 
 /* 卡片（便签） */
-.card-note { position: absolute; pointer-events: auto; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+.card-note { position: absolute; pointer-events: none; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
   display: flex; flex-direction: column; overflow: hidden; min-width: 120px; min-height: 90px; }
 .card-bar { height: 20px; flex-shrink: 0; cursor: grab; background: rgba(0,0,0,.06); display: flex; align-items: center; justify-content: flex-end; padding: 0 4px; }
 .card-bar:active { cursor: grabbing; }
 .card-del { border: none; background: none; cursor: pointer; color: rgba(0,0,0,.4); font-size: 12px; line-height: 1; padding: 2px 4px; }
 .card-del:hover { color: var(--danger); }
 .card-body { flex: 1; padding: 8px 10px; outline: none; overflow-y: auto; font-size: 15px; color: #333; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
-.card-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; opacity: .35;
-  background: linear-gradient(135deg, transparent 50%, rgba(0,0,0,.55) 50%); border-bottom-right-radius: 10px; }
-.card-resize:hover { opacity: .9; }
+.card-resize { position: absolute; right: 0; bottom: 0; width: 22px; height: 22px; cursor: nwse-resize; opacity: .5; touch-action: none;
+  background: linear-gradient(135deg, transparent 45%, rgba(0,0,0,.5) 45%, rgba(0,0,0,.5) 60%, transparent 60%, transparent 72%, rgba(0,0,0,.5) 72%, rgba(0,0,0,.5) 88%, transparent 88%); border-bottom-right-radius: 10px; }
+.card-resize:hover { opacity: .95; }
+/* 卡片仅在文本/套索工具下可交互（拖动/编辑/改大小）；绘图工具下卡片不拦指针，可在其上手写 */
+#cardLayer.interactive { pointer-events: none; }
+#cardLayer.interactive .card-note { pointer-events: auto; }
 
 /* ═══════════ 内嵌小工具（计算器 / 计时器） ═══════════ */
 .mini-app { position: fixed; z-index: 120; background: #fff; border-radius: 16px; box-shadow: var(--shadow-pop);
@@ -261,6 +267,20 @@ body.pane-right #splitWrap { inset: 48px 0 0 0; }
 .sel-bar .sel-b.danger svg { width: 18px; height: 18px; }
 .sel-bar .sel-dot { width: 14px; height: 14px; border-radius: 50%; background: #1c1c1e; border: 1px solid rgba(0,0,0,.15); }
 #selColorInput { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* 字号浮动条（文本/卡片） */
+.font-bar {
+  position: fixed; z-index: 46; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 2px; padding: 4px 5px;
+  background: #fff; border-radius: 12px; box-shadow: var(--shadow-pop);
+}
+.font-bar.hidden { display: none; }
+.font-bar .fb-b {
+  border: none; background: none; cursor: pointer; font: inherit; font-weight: 700;
+  color: var(--text); padding: 5px 10px; border-radius: 8px; line-height: 1;
+}
+.font-bar .fb-b:hover { background: rgba(0,0,0,.06); }
+.font-bar .fb-val { min-width: 26px; text-align: center; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* ═══════════ 底部悬浮胶囊 Dock ═══════════ */
 #dock {

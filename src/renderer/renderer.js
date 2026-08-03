@@ -107,6 +107,7 @@ async function init() {
   buildPalette();
   bindSplit();
   bindSync();
+  initFontBar();
 
   // 右侧分屏子实例：直接打开指定笔记、进入精简子视图，跳过书架
   if (paneMode === "right") {
@@ -335,6 +336,7 @@ function applyTransform() {
   pagesCol.style.transform = `translate(${panX}px, ${panY}px)`;
   positionLiveStack();
   if (sel) drawSelection();
+  positionFontBar();
 }
 // 把可交互画布栈对齐到当前活动页槽
 function positionLiveStack() {
@@ -933,6 +935,12 @@ function selectTool(t) {
   textLayer.style.pointerEvents = t === "text" ? "auto" : "none";
   // 图片对象仅在套索工具下可选中/拖动/缩放，其余工具可在图片上正常书写
   const il = $("#imageLayer"); if (il) { il.classList.toggle("interactive", t === "lasso"); if (t !== "lasso") $$("#imageLayer .img-obj.selected").forEach((el) => el.classList.remove("selected")); }
+  // 卡片：文本/套索工具下可拖动/编辑/改大小；笔/荧光笔/橡皮等绘图工具下卡片不拦指针
+  // → 笔画直接落到 ink 画布（ink 已提到卡片上方，墨迹显在卡片上面）→ 可以在卡片上手写。
+  const clInteractive = (t === "text" || t === "lasso");
+  const cl = $("#cardLayer"); if (cl) cl.classList.toggle("interactive", clInteractive);
+  // 文本/套索工具下 ink 让出指针，下层 DOM（卡片/文本/图片）才能被拖拽/编辑。
+  ink.classList.toggle("passthru", clInteractive);
   ink.style.cursor = t === "pan" ? "grab" : t === "text" ? "text" : "crosshair";
   syncToolGrid();
   persistSettings();
@@ -1068,6 +1076,13 @@ function onDown(e) {
     opacity: penOpacity, pWidth: pWidthOn, pWidthAmt, pAlpha: pAlphaOn, pAlphaAmt };
   if (tool === "eraser") { drawing = true; cur = { tool: "eraser", points: [pt] }; erasedThisStroke = false; eraseAt(pt); drawEraserCursor(pt); }
 }
+// 取本次 pointermove 之间浏览器合并的所有高频采样点（手写笔常 120~240Hz，
+// 但 pointermove 只按帧派发，中间点全在 getCoalescedEvents 里）。抓全 → 消折线。
+function coalescedLogical(e) {
+  const evs = (typeof e.getCoalescedEvents === "function") ? e.getCoalescedEvents() : null;
+  if (evs && evs.length) return evs.map(toLogical);
+  return [toLogical(e)];
+}
 function onMove(e) {
   const pt = toLogical(e);
   if (panning) { panX = panStart.px + (e.clientX - panStart.x); panY = panStart.py + (e.clientY - panStart.y); applyTransform(); return; }
@@ -1077,11 +1092,13 @@ function onMove(e) {
     return;
   }
   if (!drawing) return;
-  if (tool === "eraser") { cur.points.push(pt); eraseAt(pt); drawEraserCursor(pt); return; }
+  if (tool === "eraser") { for (const q of coalescedLogical(e)) cur.points.push(q); eraseAt(pt); drawEraserCursor(pt); return; }
   if (tool === "cover") { drawCoverPreview(coverStart, pt); return; }
   if (tool === "shot") { drawShotPreview(shotStart, pt); return; }
   if (tool === "laser") { laserCur.points.push(pt); drawLaserLive(); return; }
-  cur.points.push(pt); drawStrokeLive();
+  // 笔：把两帧间所有合并采样点全部收进当前笔迹 → 曲线穿过真实轨迹，不再折线。
+  for (const q of coalescedLogical(e)) cur.points.push(q);
+  drawStrokeLive();
 }
 function onUp() {
   if (_liveRAF) { cancelAnimationFrame(_liveRAF); _liveRAF = 0; }
@@ -1096,7 +1113,7 @@ function onUp() {
   if (tool === "cover") { octx.clearRect(0, 0, PW, PH); if (coverStart) finalizeCover(coverStart, lastCoverPt); coverStart = null; return; }
   if (tool === "shot") { octx.clearRect(0, 0, PW, PH); if (shotStart) finalizeShot(shotStart, lastShotPt); shotStart = null; return; }
   if (tool === "laser") { if (laserCur && laserCur.points.length) pushLaserTrail(laserCur.points); laserCur = null; return; }   // 激光笔痕迹自动淡出，不留存
-  if (tool === "eraser") { cur = null; octx.clearRect(0, 0, PW, PH); if (erasedThisStroke) { save(); renderThumbs(); } erasedThisStroke = false; return; }
+  if (tool === "eraser") { cur = null; if (_eraseRAF) { cancelAnimationFrame(_eraseRAF); _eraseRAF = 0; } renderInk(); octx.clearRect(0, 0, PW, PH); if (erasedThisStroke) { save(); renderThumbs(); } erasedThisStroke = false; return; }
   if (cur && cur.points.length) {
     if (tool === "shape") cur = recognizeShape(cur);
     pushUndo(); curPage().strokes.push(cur); save(); renderInk(); renderThumbs();
@@ -1300,18 +1317,59 @@ function buildInkCache() {
   for (const s of curPage().strokes) strokePath(_inkCacheCtx, s);
   _inkCacheDirty = false;
 }
+// 实时预览的轻量描边：不走压感渐变的重算法（印章+getImageData 逐像素），
+// 只用普通逐段贝塞尔描边跟手。抬笔(onUp)时 renderInk 才用完整 strokePath 出高质量效果。
+function strokePathLive(ctx, s) {
+  const pts = s.points; if (!pts.length) return;
+  const alphaOn = s.pAlpha ?? false;
+  // 实时预览里压感透明度用“整条平均压感”的单一 alpha 近似（抬笔后才变真浓洡），
+  // 成本极低且不会随笔长变重。
+  const base = Math.max(0.02, Math.min(1, baseOpacity(s)));
+  let a = base;
+  if (alphaOn) a = strokeAlpha(s);
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.strokeStyle = s.color; ctx.fillStyle = s.color;
+  const mid = (x, y) => ({ x: (x.x + y.x) / 2, y: (x.y + y.y) / 2 });
+  ctx.globalAlpha = a;
+  if (pts.length === 1) {
+    ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, widthAt(s, pts[0].p ?? 0.5) / 2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1; return;
+  }
+  if (pts.length === 2) {
+    ctx.beginPath(); ctx.lineWidth = widthAt(s, ((pts[0].p ?? 0.5) + (pts[1].p ?? 0.5)) / 2);
+    ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); ctx.stroke();
+    ctx.globalAlpha = 1; return;
+  }
+  let prevMid = pts[0];
+  for (let i = 1; i < pts.length; i++) {
+    const curMid = i < pts.length - 1 ? mid(pts[i], pts[i + 1]) : pts[pts.length - 1];
+    ctx.beginPath();
+    ctx.lineWidth = widthAt(s, ((pts[i - 1].p ?? 0.5) + (pts[i].p ?? 0.5)) / 2);
+    ctx.moveTo(prevMid.x, prevMid.y);
+    ctx.quadraticCurveTo(pts[i].x, pts[i].y, curMid.x, curMid.y);
+    ctx.stroke();
+    prevMid = curMid;
+  }
+  ctx.globalAlpha = 1;
+}
 function renderLiveNow() {
   _liveRAF = 0;
   if (_inkCacheDirty) buildInkCache();
   ictx.clearRect(0, 0, PW, PH);
   ictx.drawImage(_inkCache, 0, 0);        // 已提交笔画(缓存)
-  if (cur) strokePath(ictx, cur);         // 只实时重画当前这一笔
+  if (cur) strokePathLive(ictx, cur);     // 只实时重画当前这一笔（轻量描边，不卡）
 }
 function drawStrokeLive() {
   if (_liveRAF) return;               // 本帧已排队，合并
   _liveRAF = requestAnimationFrame(renderLiveNow);
 }
 let erasedThisStroke = false;
+// 橡皮重画帧合并：一帧内多次 eraseAt 只重画一次（避免笔画多时每次移动都全页重画→卡）。
+let _eraseRAF = 0;
+function scheduleEraseRedraw() {
+  if (_eraseRAF) return;
+  _eraseRAF = requestAnimationFrame(() => { _eraseRAF = 0; renderInk(); });
+}
 // 点到线段最近距离（用于精准判断笔画是否被橡皮碰到）
 function distToSeg(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y, L = dx * dx + dy * dy;
@@ -1353,7 +1411,7 @@ function eraseAt(pt) {
     }
     if (changed) {
       if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; }
-      curPage().strokes = out; renderInk();
+      curPage().strokes = out; scheduleEraseRedraw();
     }
     return;
   }
@@ -1361,7 +1419,7 @@ function eraseAt(pt) {
   const r = 14;
   let hit = -1;
   for (let i = strokes.length - 1; i >= 0; i--) if (strokes[i].points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r)) { hit = i; break; }
-  if (hit >= 0) { if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; } strokes.splice(hit, 1); renderInk(); }
+  if (hit >= 0) { if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; } strokes.splice(hit, 1); scheduleEraseRedraw(); }
 }
 
 function drawEraserCursor(pt) {
@@ -1565,8 +1623,14 @@ function mountCard(c, edit) {
     <div class="card-body" contenteditable="true" spellcheck="false"></div>
     <div class="card-resize" title="拖拽改变大小"></div>`;
   const body = el.querySelector(".card-body"); body.textContent = c.content;
+  if (c.fontSize) body.style.fontSize = c.fontSize + "px";
   const bar = el.querySelector(".card-bar");
-  body.addEventListener("blur", () => { c.content = body.textContent; save(); refreshCardIndex(); });
+  body.addEventListener("blur", () => { c.content = body.textContent; save(); refreshCardIndex(); if (_fontTarget && _fontTarget.el === body) hideFontBar(); });
+  body.addEventListener("focus", () => {
+    showFontBar({ el: body, kind: "card",
+      size: () => c.fontSize || 15,
+      setSize: (v) => { c.fontSize = v; body.style.fontSize = v + "px"; save(); } });
+  });
   el.querySelector(".card-del").addEventListener("click", () => {
     curPage().cards = (curPage().cards || []).filter((x) => x.id !== c.id); el.remove(); save(); refreshCardIndex();
   });
@@ -1852,12 +1916,50 @@ function mountText(t, edit) {
     el.classList.remove("editing"); t.content = el.textContent;
     if (!t.content.trim()) { curPage().texts = curPage().texts.filter((x) => x.id !== t.id); el.remove(); }
     save();
+    if (_fontTarget && _fontTarget.el === el) hideFontBar();
+  });
+  el.addEventListener("focus", () => {
+    showFontBar({ el, kind: "text",
+      size: () => t.size,
+      setSize: (v) => { t.size = v; el.style.fontSize = v + "px"; save(); } });
   });
   textLayer.appendChild(el);
   if (edit) { el.classList.add("editing"); setTimeout(() => el.focus(), 0); }
 }
 function placeCaretEnd(el) { const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
 function closeText() { if (document.activeElement && document.activeElement.classList?.contains("text-box")) document.activeElement.blur(); }
+
+// ╔════════ 字号浮动条（文本框 & 卡片正文共用） ════════
+let _fontTarget = null;   // { model, el, kind:'text'|'card', get/set size }
+function showFontBar(target) {
+  _fontTarget = target;
+  const bar = $("#fontBar"); if (!bar) return;
+  $("#fontVal").textContent = Math.round(target.size());
+  bar.classList.remove("hidden");
+  positionFontBar();
+}
+function positionFontBar() {
+  const bar = $("#fontBar"); if (!bar || !_fontTarget || bar.classList.contains("hidden")) return;
+  const r = _fontTarget.el.getBoundingClientRect();
+  let top = r.top - 44; if (top < 56) top = r.bottom + 8;
+  bar.style.left = (r.left + r.width / 2) + "px";
+  bar.style.top = top + "px";
+}
+function hideFontBar() { const b = $("#fontBar"); if (b) b.classList.add("hidden"); _fontTarget = null; }
+function bumpFont(delta) {
+  if (!_fontTarget) return;
+  const cur = _fontTarget.size();
+  const next = Math.max(8, Math.min(96, cur + delta));
+  _fontTarget.setSize(next);
+  $("#fontVal").textContent = Math.round(next);
+  positionFontBar();
+}
+function initFontBar() {
+  const dec = $("#fontDec"), inc = $("#fontInc");
+  // 用 pointerdown+preventDefault 避免点按钮时可编辑块失焦关掉 bar
+  if (dec) dec.addEventListener("pointerdown", (e) => { e.preventDefault(); bumpFont(-2); });
+  if (inc) inc.addEventListener("pointerdown", (e) => { e.preventDefault(); bumpFont(2); });
+}
 
 // ═══════════ 纸张模板 ═══════════
 function baseOf(tpl) {

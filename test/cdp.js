@@ -85,6 +85,13 @@ function wsConnect(wsUrl) {
         });
       },
       close() { sock.end(); },
+      shot() {
+        return new Promise((res) => {
+          const id = ++msgId;
+          pending[id] = (m) => res(m.result && m.result.data ? m.result.data : null);
+          send({ id, method: "Page.captureScreenshot", params: { format: "png" } });
+        });
+      },
     };
   });
 }
