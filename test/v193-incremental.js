@@ -40,10 +40,10 @@ module.exports = async (cdp) => {
   console.log("换笔后上条残留 alpha:", d.ghostTop);
   // 增量 vs 一次性：每列差 <= 3（允许极小舍入）
   let maxDiff = 0; for (let i=0;i<d.incr.length;i++) maxDiff = Math.max(maxDiff, Math.abs(d.incr[i]-d.once[i]));
-  const identical = maxDiff <= 6;   // <=6/255 ≈ 2.3% 胉眼不可辨（增量 densify 重采样的亚像素差，不影响视觉）
+  const identical = maxDiff <= 1;   // 逐像素精确：增量累积与一次性铺满逐列一致
   const noGhost = d.ghostTop <= 4;
   console.log("增量与一次性最大列差:", maxDiff);
-  console.log((identical?"PASS ":"FAIL ")+"增量≈一次性(逐列差<=6/255胉眼不可辨)");
+  console.log((identical?"PASS ":"FAIL ")+"增量==一次性(逐列差<=1)");
   console.log((noGhost?"PASS ":"FAIL ")+"换笔无残留");
   const pass = identical && noGhost;
   console.log("PASS="+pass);
