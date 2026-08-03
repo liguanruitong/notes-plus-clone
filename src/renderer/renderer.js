@@ -1322,29 +1322,36 @@ function buildInkCache() {
 function strokePathLive(ctx, s) {
   const pts = s.points; if (!pts.length) return;
   const alphaOn = s.pAlpha ?? false;
-  // 实时预览里压感透明度用“整条平均压感”的单一 alpha 近似（抬笔后才变真浓洡），
-  // 成本极低且不会随笔长变重。
   const base = Math.max(0.02, Math.min(1, baseOpacity(s)));
-  let a = base;
-  if (alphaOn) a = strokeAlpha(s);
+  // pAlpha 开时逐段浓淡：每段用该段平均压感算自己的 alpha，实时可见浓淡随压感变化。
+  // 轻量矢量描边（无离屏/getImageData），成本随笔长线性且系数很小，不卡。
+  // 接缝处半透明会轻微叠深，实时预览可接受——抬笔后由无叠深的 strokePathGradient 替换。
+  const segAlpha = (p) => alphaOn
+    ? Math.max(0.02, Math.min(1, base * pointAlphaFactor(s, p)))
+    : base;
   ctx.lineJoin = "round"; ctx.lineCap = "round";
   ctx.strokeStyle = s.color; ctx.fillStyle = s.color;
   const mid = (x, y) => ({ x: (x.x + y.x) / 2, y: (x.y + y.y) / 2 });
-  ctx.globalAlpha = a;
   if (pts.length === 1) {
-    ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, widthAt(s, pts[0].p ?? 0.5) / 2, 0, Math.PI * 2); ctx.fill();
+    const p0 = pts[0].p ?? 0.5;
+    ctx.globalAlpha = segAlpha(p0);
+    ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, widthAt(s, p0) / 2, 0, Math.PI * 2); ctx.fill();
     ctx.globalAlpha = 1; return;
   }
   if (pts.length === 2) {
-    ctx.beginPath(); ctx.lineWidth = widthAt(s, ((pts[0].p ?? 0.5) + (pts[1].p ?? 0.5)) / 2);
+    const pm = ((pts[0].p ?? 0.5) + (pts[1].p ?? 0.5)) / 2;
+    ctx.globalAlpha = segAlpha(pm);
+    ctx.beginPath(); ctx.lineWidth = widthAt(s, pm);
     ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[1].x, pts[1].y); ctx.stroke();
     ctx.globalAlpha = 1; return;
   }
   let prevMid = pts[0];
   for (let i = 1; i < pts.length; i++) {
     const curMid = i < pts.length - 1 ? mid(pts[i], pts[i + 1]) : pts[pts.length - 1];
+    const pm = ((pts[i - 1].p ?? 0.5) + (pts[i].p ?? 0.5)) / 2;
+    ctx.globalAlpha = segAlpha(pm);
     ctx.beginPath();
-    ctx.lineWidth = widthAt(s, ((pts[i - 1].p ?? 0.5) + (pts[i].p ?? 0.5)) / 2);
+    ctx.lineWidth = widthAt(s, pm);
     ctx.moveTo(prevMid.x, prevMid.y);
     ctx.quadraticCurveTo(pts[i].x, pts[i].y, curMid.x, curMid.y);
     ctx.stroke();
