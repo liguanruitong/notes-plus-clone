@@ -290,6 +290,7 @@ async function openNotebook(id) {
   resizeActiveCanvases();
   fitToStage();
   buildPages();
+  _inkCacheDirty = true;   // 打开新笔记，缓存必失效
   renderAll();
   renderTexts();
 }
@@ -371,6 +372,7 @@ function setActivePage(i, opts = {}) {
   const prev = pageIdx; pageIdx = i;
   if (prev !== i && nb.pages[prev]) refreshPageStatic(prev);
   undoStack.length = 0; redoStack.length = 0;
+  _inkCacheDirty = true;   // 换页 curPage 变了，缓存必失效
   resizeActiveCanvases();
   buildTemplatePicker(); positionLiveStack(); renderAll();
   updatePageIndicator();
@@ -1074,7 +1076,7 @@ function onDown(e) {
   drawing = true;
   cur = { tool: tool === "highlighter" ? "highlighter" : "pen", color, size, points: [pt],
     opacity: penOpacity, pWidth: pWidthOn, pWidthAmt, pAlpha: pAlphaOn, pAlphaAmt };
-  if (tool === "eraser") { drawing = true; cur = { tool: "eraser", points: [pt] }; erasedThisStroke = false; eraseAt(pt); drawEraserCursor(pt); }
+  if (tool === "eraser") { drawing = true; _erasing = true; cur = { tool: "eraser", points: [pt] }; erasedThisStroke = false; eraseAt(pt); drawEraserCursor(pt); }
 }
 // 取本次 pointermove 之间浏览器合并的所有高频采样点（手写笔常 120~240Hz，
 // 但 pointermove 只按帧派发，中间点全在 getCoalescedEvents 里）。抓全 → 消折线。
@@ -1113,7 +1115,7 @@ function onUp() {
   if (tool === "cover") { octx.clearRect(0, 0, PW, PH); if (coverStart) finalizeCover(coverStart, lastCoverPt); coverStart = null; return; }
   if (tool === "shot") { octx.clearRect(0, 0, PW, PH); if (shotStart) finalizeShot(shotStart, lastShotPt); shotStart = null; return; }
   if (tool === "laser") { if (laserCur && laserCur.points.length) pushLaserTrail(laserCur.points); laserCur = null; return; }   // 激光笔痕迹自动淡出，不留存
-  if (tool === "eraser") { cur = null; if (_eraseRAF) { cancelAnimationFrame(_eraseRAF); _eraseRAF = 0; } renderInk(); octx.clearRect(0, 0, PW, PH); if (erasedThisStroke) { save(); renderThumbs(); } erasedThisStroke = false; return; }
+  if (tool === "eraser") { cur = null; _erasing = false; if (_eraseRAF) { cancelAnimationFrame(_eraseRAF); _eraseRAF = 0; } if (erasedThisStroke) _inkCacheDirty = true; renderInk(); octx.clearRect(0, 0, PW, PH); if (erasedThisStroke) { save(); renderThumbs(); } erasedThisStroke = false; return; }
   if (cur && cur.points.length) {
     if (tool === "shape") cur = recognizeShape(cur);
     pushUndo(); curPage().strokes.push(cur); save(); renderInk(); renderThumbs();
@@ -1377,13 +1379,29 @@ let _liveRAF = 0;
 // 实时绘制缓存：已提交笔画静态，缓存到离屏 canvas，实时只重画当前这一笔，
 // 大幅降多笔画页面的实时重绘成本(渐变笔用了 getImageData，尤需)。
 let _inkCache = null, _inkCacheCtx = null, _inkCacheDirty = true;
+// 缓存里已烘焙的「当前页 strokes 条数」。用于增量：只把尚未入缓存的新笔补画进去。
+let _inkCacheCount = 0;
 function markInkCacheDirty() { _inkCacheDirty = true; }
+// 全量重建：仅删除/替换类操作或首次渲染时才需要（成本随笔数线性，尽量少触发）。
 function buildInkCache() {
   if (!_inkCache) { _inkCache = document.createElement("canvas"); _inkCacheCtx = _inkCache.getContext("2d"); }
   if (_inkCache.width !== PW || _inkCache.height !== PH) { _inkCache.width = PW; _inkCache.height = PH; }
   _inkCacheCtx.clearRect(0, 0, PW, PH);
   for (const s of curPage().strokes) strokePath(_inkCacheCtx, s);
+  _inkCacheCount = curPage().strokes.length;
   _inkCacheDirty = false;
+}
+// 增量：把 _inkCacheCount 之后新增的笔逐条并进缓存（无新笔则啥都不做，成本≈新笔条数）。
+// 缓存失效/尺寸变化/条数回退(删除)时兜底全量重建。注意：像素橡皮会拆分笔画使条数「增加」，
+// 那种情况靠调用方显式 _inkCacheDirty=true（见 eraseAt），单凭条数比较无法察觉，故不能省。
+function commitNewStrokesToCache() {
+  const strokes = curPage().strokes;
+  if (!_inkCache || _inkCacheDirty || _inkCache.width !== PW || _inkCache.height !== PH || _inkCacheCount > strokes.length) {
+    buildInkCache();
+    return;
+  }
+  for (let i = _inkCacheCount; i < strokes.length; i++) strokePath(_inkCacheCtx, strokes[i]);
+  _inkCacheCount = strokes.length;
 }
 // 实时预览的轻量描边：不走压感渐变的重算法（印章+getImageData 逐像素），
 // 只用普通逐段贝塞尔描边跟手。抬笔(onUp)时 renderInk 才用完整 strokePath 出高质量效果。
@@ -1444,11 +1462,23 @@ function drawStrokeLive() {
   _liveRAF = requestAnimationFrame(renderLiveNow);
 }
 let erasedThisStroke = false;
+let _erasing = false;   // 橡皮拖动中：拖动期间不做整页重建，只做 destination-out 实时抠除，抬笔才重建一次。
 // 橡皮重画帧合并：一帧内多次 eraseAt 只重画一次（避免笔画多时每次移动都全页重画→卡）。
 let _eraseRAF = 0;
 function scheduleEraseRedraw() {
+  // 擦除拖动中：不做整页全量重建(满页 buildInkCache 达 600+ms 会卡)，
+  // 只在当前显示画布 ictx 上用 destination-out 把橡皮划过处的墨迹实时挖掉——
+  // 成本只与橡皮小圆有关，与笔画总数无关。真正的缓存重建延迟到抬笔(onUp)一次性做。
+  if (_erasing) return;
   if (_eraseRAF) return;
   _eraseRAF = requestAnimationFrame(() => { _eraseRAF = 0; renderInk(); });
+}
+// 在 ictx 上按橡皮笔尖圆做 destination-out，实时抠掉墨迹（拖动中用，恒定小成本）。
+function liveEraseAt(pt, radius) {
+  ictx.save();
+  ictx.globalCompositeOperation = "destination-out";
+  ictx.beginPath(); ictx.arc(pt.x, pt.y, radius, 0, Math.PI * 2); ictx.fill();
+  ictx.restore();
 }
 // 点到线段最近距离（用于精准判断笔画是否被橡皮碰到）
 function distToSeg(p, a, b) {
@@ -1491,7 +1521,10 @@ function eraseAt(pt) {
     }
     if (changed) {
       if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; }
-      curPage().strokes = out; scheduleEraseRedraw();
+      curPage().strokes = out; _inkCacheDirty = true;
+      // 拖动中实时抠除：在 ictx 抠掉橡皮笔尖圆（半径=橡皮半径 r + 小余量）。
+      // 非拖动（理论上不会发生，橡皮都是拖的）则走常规重建。
+      if (_erasing) liveEraseAt(pt, r + 4); else scheduleEraseRedraw();
     }
     return;
   }
@@ -1499,7 +1532,24 @@ function eraseAt(pt) {
   const r = 14;
   let hit = -1;
   for (let i = strokes.length - 1; i >= 0; i--) if (strokes[i].points.some((p) => Math.hypot(p.x - pt.x, p.y - pt.y) < r)) { hit = i; break; }
-  if (hit >= 0) { if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; } strokes.splice(hit, 1); scheduleEraseRedraw(); }
+  if (hit >= 0) {
+    if (!erasedThisStroke) { pushUndo(); erasedThisStroke = true; }
+    const removed = strokes[hit];
+    strokes.splice(hit, 1); _inkCacheDirty = true;
+    // 拖动中实时抠除：整笔擦除会删掉整条笔，故沿它的路径用 destination-out 描一遭（宽度加富余）把它从 ictx 抠干净。
+    if (_erasing && removed && removed.points.length) {
+      ictx.save();
+      ictx.globalCompositeOperation = "destination-out";
+      ictx.lineJoin = ictx.lineCap = "round";
+      const rp = removed.points;
+      const w = (removed.tool === "highlighter" ? (removed.size || 4) * 3 : (removed.size || 4));
+      ictx.lineWidth = w + 6;
+      ictx.beginPath(); ictx.moveTo(rp[0].x, rp[0].y);
+      for (let i = 1; i < rp.length; i++) ictx.lineTo(rp[i].x, rp[i].y);
+      if (rp.length === 1) { ictx.arc(rp[0].x, rp[0].y, (w + 6) / 2, 0, Math.PI * 2); ictx.fill(); } else ictx.stroke();
+      ictx.restore();
+    } else scheduleEraseRedraw();
+  }
 }
 
 function drawEraserCursor(pt) {
@@ -1808,6 +1858,7 @@ function applySelTransform() {
       return { ...p, x: sel.ocx + rx + sel.tx, y: sel.ocy + ry + sel.ty };
     });
   });
+  _inkCacheDirty = true;   // 原地改点坐标，条数不变，须显式标脏重建
   renderInk();
 }
 function drawSelection() {
@@ -1874,6 +1925,7 @@ function recolorSelection(c) {
   if (!sel) return;
   pushUndo();
   for (const s of sel.strokes) s.color = c;
+  _inkCacheDirty = true;   // 原地改颜色，条数不变，须显式标脏重建
   save(); renderInk(); renderThumbs();
 }
 function duplicateSelection() {
@@ -1889,6 +1941,7 @@ function deleteSelection() {
   if (!sel) return;
   pushUndo();
   curPage().strokes = curPage().strokes.filter((s) => !sel.strokes.includes(s));
+  _inkCacheDirty = true;
   clearSelection(); save(); renderInk(); renderThumbs();
 }
 function clearSelection() { sel = null; selDragLast = null; lassoPts = null; selGesture = null; octx.clearRect(0, 0, PW, PH); hideSelBar(); }
@@ -2295,9 +2348,12 @@ function bindPenMultiEditor() {
 }
 
 // ═══════════ 渲染 ═══════════
-function renderAll() { applyTransform(); drawPaper(); renderInk(); renderImages(); renderTexts(); renderCovers(); renderCards(); renderThumbs(); updatePageIndicator(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
+// renderAll 只在切页/加载/布局变更等「当前页可能整体换掉」的低频场景调用，
+// 故这里统一标脏，让 renderInk 走一次全量重建，覆盖 setActivePage/openNotebook/addPage/deletePage 等。
+function renderAll() { _inkCacheDirty = true; applyTransform(); drawPaper(); renderInk(); renderImages(); renderTexts(); renderCovers(); renderCards(); renderThumbs(); updatePageIndicator(); const bp = $("#btnBookmarkPage"); if (bp) bp.textContent = curPage().bookmark ? "★" : "☆"; }
 function drawPaper() { pctx.clearRect(0, 0, PW, PH); paintTemplate(pctx, curPage()); }
-function renderInk() { markInkCacheDirty(); ictx.clearRect(0, 0, PW, PH); for (const s of curPage().strokes) strokePath(ictx, s); }
+// 增量把新笔并进缓存后直接贴缓存位图。提交一条新笔只花≈画那一条的成本，与整页笔数解耦。
+function renderInk() { commitNewStrokesToCache(); ictx.clearRect(0, 0, PW, PH); ictx.drawImage(_inkCache, 0, 0); }
 function renderThumbs() {
   if ($("#sidebar").classList.contains("hidden") || drawerMode !== "pages") return;
   const list = $("#pageList");
@@ -2336,7 +2392,7 @@ async function clearPage() {
   if (!nb) return;
   const ok = await modalConfirm({ title: "清空当前页", desc: `第 ${pageIdx + 1} 页的所有笔迹将被清除，可用撤销恢复。`, okText: "清空", danger: true });
   if (!ok) return;
-  pushUndo(); curPage().strokes = []; save(); renderInk(); renderThumbs(); toast("已清空当前页");
+  pushUndo(); curPage().strokes = []; _inkCacheDirty = true; save(); renderInk(); renderThumbs(); toast("已清空当前页");
 }
 // 侧栏缩略图跳转：切换活动页并滚动定位
 function gotoPage(i) {
@@ -2368,8 +2424,8 @@ async function renameCurrent() { const t = await modalInput({ title: "重命名"
 // ═══════════ undo / redo ═══════════
 function snapshot() { return JSON.parse(JSON.stringify(curPage().strokes)); }
 function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 120) undoStack.shift(); redoStack.length = 0; }
-function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); curPage().strokes = undoStack.pop(); save(); renderInk(); renderThumbs(); }
-function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); curPage().strokes = redoStack.pop(); save(); renderInk(); renderThumbs(); }
+function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); curPage().strokes = undoStack.pop(); _inkCacheDirty = true; save(); renderInk(); renderThumbs(); }
+function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); curPage().strokes = redoStack.pop(); _inkCacheDirty = true; save(); renderInk(); renderThumbs(); }
 
 function bindKeys() {
   window.addEventListener("keydown", (e) => {
